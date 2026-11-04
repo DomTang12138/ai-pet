@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def public_files() -> list[Path]:
     names = {'.gitignore', '.gitattributes', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'README.md', 'IMPLEMENTATION-PLAN.md',
+             'docs/media/ai-pet-codex-demo.gif', 'docs/media/ai-pet-action-preview.png',
              'index.html', 'app.js', 'styles.css', 'simple-ui.js', 'simple-ui.css', 'theme-frame-player.js',
              'runtime/DesktopPet.cs', 'runtime/PetExperience.cs', 'runtime/PetCodex.cs', 'runtime/build.ps1', 'runtime/install-public.ps1',
              'runtime/PetVideoExperience.cs', 'runtime/PetVideoRequests.cs', 'runtime/PetVideoImport.cs', 'tools/extract_pet_video.py', 'tools/extract_pet_video_smoke.py',

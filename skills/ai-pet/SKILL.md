@@ -11,7 +11,7 @@ Use the repository's commands instead of automating tray clicks. The product has
 
 Locate the user's AI-PET checkout or installed release. For a checkout, the command wrapper is `tools/ai-pet.ps1`. This Skill may be copied independently of the repository, so locate the checkout explicitly; do not assume the Skill's parent is the checkout. Do not download from an invented repository URL.
 
-The canonical public repository is https://github.com/tanghuanqiang/ai-pet. If no installation exists, retrieve an actual published Windows release from that repository (preview releases are currently used), or clone its source and build. Resolve download names and URLs from the repository's real release metadata. Run the package's installer, then use the installed command wrapper and retain the installed generation-adapter files if configuring a backend.
+The canonical public repository is https://github.com/DomTang12138/ai-pet. If no installation exists, retrieve an actual published Windows release from that repository (preview releases are currently used), or clone its source and build. Resolve download names and URLs from the repository's real release metadata. Run the package's installer, then use the installed command wrapper and retain the installed generation-adapter files if configuring a backend.
 
 On Windows with .NET Framework 4.8 or newer desktop components, build the checkout using:
 

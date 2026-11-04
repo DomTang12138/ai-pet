@@ -30,7 +30,7 @@
 - [x] 同一窗口接收 1–4 张图片及 Prompt，保存本地制作请求，接收 Agent 候选并进入确认预览；本机模板网页改为渐进展开。
 - [x] 创建可分发 Skill，格式校验及安装版命令检查通过。
 - [x] 公开源码脱离私人参考图构建，公开演示宠物、安装器与隔离安装通过。
-- [x] 已推送到用户确认的 [tanghuanqiang/ai-pet](https://github.com/tanghuanqiang/ai-pet)，发布 [v0.3.0-preview.1](https://github.com/tanghuanqiang/ai-pet/releases/tag/v0.3.0-preview.1) Windows 包和 Skill；上传后指纹一致。
+- [x] 已推送到用户确认的 [DomTang12138/ai-pet](https://github.com/DomTang12138/ai-pet)，发布 [v0.3.0-preview.1](https://github.com/DomTang12138/ai-pet/releases/tag/v0.3.0-preview.1) Windows 包和 Skill；上传后指纹一致。
 - [x] 配置生成后端后，原生“生成动作”按钮自动提交图片与 Prompt，在同一窗口显示进度、取消、失败重试及预览入口。四图完整传递、候选校验、原作品保护与取消/超时/中断后子进程回收已通过真实进程回归；本地模型候选已能进入原生确认预览。
 - [x] 默认入口改为自己的 Agent 制作：原生按钮保存请求并复制准确制作说明，候选仍回到原窗口预览；本机模型保留可选。
 - [x] 完成默认 Agent 路线的真实照片与 Prompt 制作流程验收：单图和双参考图均由实际生成工具制作八帧短尾动作，背景处理、打包、回传、原生三背景预览及真实播放推进/结束回待机均已核实；未自动批准或替换用户宠物。界面简洁度已获用户确认。样例证明流程可用，不保证任意照片/Prompt 都能正确生成；可选本机模型的质量改进继续作为后续工作。
@@ -43,10 +43,10 @@
 - 用户当前使用 Codex 桌面端：默认采用已接通的本机会话读取，不要求切换 CLI。Hooks 作为可选增强，官方文档目前明确给出 CLI 审核入口，本项目尚未核实桌面审核入口。明确显示成功的选择题已接通“需要回答”；权限提示和普通文字追问仍待可靠信号，不能把待审核 Hooks 视为默认路线的阻塞条件。
 - [x] 桌面端明确选择题请求纳入 `needs-user`：匹配实际输入请求及显示成功确认，不读文字猜测。当前真实会话已观察到 `running → needs-user`；隔离 WPF 进程验证实际动作与失败、过期、重复、其他会话及普通文字不误触发。权限提示及普通文字追问仍属未自动识别范围。
 - [x] 完整桌面回归统一使用隔离数据、事件、确认账本和 Codex 目录，避免继承本机实际连接而干扰测试或作品；执行结束恢复原环境变量。
-- [x] 发布 [v0.3.0-preview.2](https://github.com/tanghuanqiang/ai-pet/releases/tag/v0.3.0-preview.2)：完整桌面回归、公开源码构建与安装包内 Codex 命令回归通过；Windows ZIP 与 Skill 的远端 SHA-256 与本地一致。验证使用隔离安装，未覆盖正式安装。
-- [x] 发布 [v0.3.0-preview.3](https://github.com/tanghuanqiang/ai-pet/releases/tag/v0.3.0-preview.3)：默认 Agent 制作交接、可选自动生成器、简化动作预览。公开源码独立构建、隔离安装后的原生按钮复制多图请求、候选回传预览、原作品保留、生成进程生命周期和 Codex 五状态回归通过；Windows ZIP 与 Skill 远端 SHA-256 与本地一致。候选回传的协议回归使用演示素材，不代表实际 AI 动作质量验收。
-- [x] 发布 [v0.3.0-preview.4](https://github.com/tanghuanqiang/ai-pet/releases/tag/v0.3.0-preview.4)：补充 Agent 图集导入、旧 Hooks 迁移和桌面默认连接流程。
-- [x] 发布 [v0.3.0-preview.5](https://github.com/tanghuanqiang/ai-pet/releases/tag/v0.3.0-preview.5)：桌面明确选择题信号与完整隔离回归通过，实际本机升级、单图及双参考图 Agent 制作和原生播放已验证。Windows ZIP SHA-256 为 `9199f51e6cfb39b2c5f4b120dbda5b6efe56c52618151e364d80968455ba9312`，独立 Skill 为 `8cc0b3502903f1943b852068bebebaa6337a3e9e97d30e723706d39ee93c258c`；两项上传后远端指纹一致。六项菜单保持用户确认的版本。
+- [x] 发布 [v0.3.0-preview.2](https://github.com/DomTang12138/ai-pet/releases/tag/v0.3.0-preview.2)：完整桌面回归、公开源码构建与安装包内 Codex 命令回归通过；Windows ZIP 与 Skill 的远端 SHA-256 与本地一致。验证使用隔离安装，未覆盖正式安装。
+- [x] 发布 [v0.3.0-preview.3](https://github.com/DomTang12138/ai-pet/releases/tag/v0.3.0-preview.3)：默认 Agent 制作交接、可选自动生成器、简化动作预览。公开源码独立构建、隔离安装后的原生按钮复制多图请求、候选回传预览、原作品保留、生成进程生命周期和 Codex 五状态回归通过；Windows ZIP 与 Skill 远端 SHA-256 与本地一致。候选回传的协议回归使用演示素材，不代表实际 AI 动作质量验收。
+- [x] 发布 [v0.3.0-preview.4](https://github.com/DomTang12138/ai-pet/releases/tag/v0.3.0-preview.4)：补充 Agent 图集导入、旧 Hooks 迁移和桌面默认连接流程。
+- [x] 发布 [v0.3.0-preview.5](https://github.com/DomTang12138/ai-pet/releases/tag/v0.3.0-preview.5)：桌面明确选择题信号与完整隔离回归通过，实际本机升级、单图及双参考图 Agent 制作和原生播放已验证。Windows ZIP SHA-256 为 `9199f51e6cfb39b2c5f4b120dbda5b6efe56c52618151e364d80968455ba9312`，独立 Skill 为 `8cc0b3502903f1943b852068bebebaa6337a3e9e97d30e723706d39ee93c258c`；两项上传后远端指纹一致。六项菜单保持用户确认的版本。
 
 ## 本轮核心验收
 
@@ -138,7 +138,7 @@
 
 本地完整记录位于 `generated/exploration-20261016/experiment-results.json`，目录名为实验起始日期；模型、照片、候选及原始实验记录不进入公开源码白名单。
 
-已发布 [v0.3.0-preview.6](https://github.com/tanghuanqiang/ai-pet/releases/tag/v0.3.0-preview.6)，包含上述 Windows 修复、Agent 上报、更新后的 Skill 和质量说明。实际 Git 提交导出的源码独立构建及原生 DPI 检查通过；Windows ZIP SHA-256 为 `678f1234157d219ed29d3c9e9420e2620a28aa49ba9548d2b70d5298165b408c`，独立 Skill 为 `06d53a98972cb7688aebf4e11e66e1dae94ff34c0a657ef86048c393efc7c0cb`，两项远端指纹一致。本机日常安装已更新并启动，原照片、主题、偏好、连接等七项文件升级前后校验一致，真实当前 Codex 会话继续触发原宠物工作动作。新生成候选未替换原作品，六项菜单不变。
+已发布 [v0.3.0-preview.6](https://github.com/DomTang12138/ai-pet/releases/tag/v0.3.0-preview.6)，包含上述 Windows 修复、Agent 上报、更新后的 Skill 和质量说明。实际 Git 提交导出的源码独立构建及原生 DPI 检查通过；Windows ZIP SHA-256 为 `678f1234157d219ed29d3c9e9420e2620a28aa49ba9548d2b70d5298165b408c`，独立 Skill 为 `06d53a98972cb7688aebf4e11e66e1dae94ff34c0a657ef86048c393efc7c0cb`，两项远端指纹一致。本机日常安装已更新并启动，原照片、主题、偏好、连接等七项文件升级前后校验一致，真实当前 Codex 会话继续触发原宠物工作动作。新生成候选未替换原作品，六项菜单不变。
 
 ## 2026-10-17 Windows 界面调整
 
@@ -148,7 +148,7 @@
 
 依据：[DWM 窗口属性](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute)、[Mica 材质](https://learn.microsoft.com/en-us/windows/apps/design/style/mica)。隔离外观检查覆盖两套颜色、下拉打开与动作绑定以及系统通知重新取色；本机高对比度和旧版 Windows 未切换实测。
 
-已完成完整桌面回归、公开包外观与五状态播放检查，并发布 [v0.3.0-preview.7](https://github.com/tanghuanqiang/ai-pet/releases/tag/v0.3.0-preview.7)。本机安装已更新并打开新版管理窗口；照片、主题、偏好、连接和审核记录等九项文件校验保持一致，重启后真实当前 Codex 会话继续触发原宠物动作。实际窗口读取到深色标题栏、圆角及 Mica 属性均已启用。Windows ZIP SHA-256 为 `f4802726a3e3910b3402da5c3f483cced8b52f9bf2085bf142daf8ea103efed2`，Skill 为 `06d53a98972cb7688aebf4e11e66e1dae94ff34c0a657ef86048c393efc7c0cb`，均与远端附件一致。验证和私有备份存于 `generated/appearance-20261017/`，不进入公开源码。
+已完成完整桌面回归、公开包外观与五状态播放检查，并发布 [v0.3.0-preview.7](https://github.com/DomTang12138/ai-pet/releases/tag/v0.3.0-preview.7)。本机安装已更新并打开新版管理窗口；照片、主题、偏好、连接和审核记录等九项文件校验保持一致，重启后真实当前 Codex 会话继续触发原宠物动作。实际窗口读取到深色标题栏、圆角及 Mica 属性均已启用。Windows ZIP SHA-256 为 `f4802726a3e3910b3402da5c3f483cced8b52f9bf2085bf142daf8ea103efed2`，Skill 为 `06d53a98972cb7688aebf4e11e66e1dae94ff34c0a657ef86048c393efc7c0cb`，均与远端附件一致。验证和私有备份存于 `generated/appearance-20261017/`，不进入公开源码。
 
 ## 2026-10-17 Codex 会话标题
 
@@ -156,7 +156,7 @@
 
 隔离检查覆盖中文／emoji 标题、重名区分、缺失名称、损坏与半写入索引行、改名刷新、索引删除降级、选择后的准确绑定，以及连接卡片不展示指纹。真实当前会话标题索引可用。记录位于 `generated/session-titles-20261017/`，不公开本机标题或测试记录。
 
-已发布 [v0.3.0-preview.8](https://github.com/tanghuanqiang/ai-pet/releases/tag/v0.3.0-preview.8) 并更新本机；公开二进制的标题检查、Codex 联动回归通过。升级前后九项作品及配置文件校验一致，真实当前会话继续收到桌面活动并播放工作动作。Windows ZIP SHA-256 为 `ebd9b3754fa1476721c801c1f7b53684e33174c2f8f0c1724d90eaa15f705b38`，Skill 为 `06d53a98972cb7688aebf4e11e66e1dae94ff34c0a657ef86048c393efc7c0cb`，与远端一致。
+已发布 [v0.3.0-preview.8](https://github.com/DomTang12138/ai-pet/releases/tag/v0.3.0-preview.8) 并更新本机；公开二进制的标题检查、Codex 联动回归通过。升级前后九项作品及配置文件校验一致，真实当前会话继续收到桌面活动并播放工作动作。Windows ZIP SHA-256 为 `ebd9b3754fa1476721c801c1f7b53684e33174c2f8f0c1724d90eaa15f705b38`，Skill 为 `06d53a98972cb7688aebf4e11e66e1dae94ff34c0a657ef86048c393efc7c0cb`，与远端一致。
 
 ## 2026-10-17 自动跟随多个 Codex 会话
 
@@ -166,7 +166,7 @@
 
 隔离原生检查覆盖多任务发现、新开始切换、交错工具不抢占、提醒优先、结束接续、旧 turn 过滤、半行、截断、暂停、固定／断开、重启模式、过期待确认、同名区分和正文不写入状态记录。验证与私有备份位于 `generated/codex-auto-20261017/`。
 
-已完成最终完整桌面回归、公开二进制自动跟随检查、Codex 手动／Hooks／输入提醒回归，发布 [v0.3.0-preview.9](https://github.com/tanghuanqiang/ai-pet/releases/tag/v0.3.0-preview.9)。按本次请求更新本机并开启自动模式；实际发现当前一个活动会话，运行状态播放来源为 `desktop-auto`，有原日志摘要证据，连接页自动开关与当前关联均可见。多会话切换验收使用隔离模拟数据；未声称本机同时存在多个真实活动会话。安装前后九项既有作品及配置校验一致，新的自动模式单独保存。Windows ZIP SHA-256 为 `af1b4637ed6994743ed2bd7afe4f72f9f97d7f09a84af4b2a75c71c28b877c84`，更新后 Skill 为 `c6fd9cfb625ce95f1dd27e05f70fa72c48309530fc0d994133e7816455bce034`，远端附件均匹配。
+已完成最终完整桌面回归、公开二进制自动跟随检查、Codex 手动／Hooks／输入提醒回归，发布 [v0.3.0-preview.9](https://github.com/DomTang12138/ai-pet/releases/tag/v0.3.0-preview.9)。按本次请求更新本机并开启自动模式；实际发现当前一个活动会话，运行状态播放来源为 `desktop-auto`，有原日志摘要证据，连接页自动开关与当前关联均可见。多会话切换验收使用隔离模拟数据；未声称本机同时存在多个真实活动会话。安装前后九项既有作品及配置校验一致，新的自动模式单独保存。Windows ZIP SHA-256 为 `af1b4637ed6994743ed2bd7afe4f72f9f97d7f09a84af4b2a75c71c28b877c84`，更新后 Skill 为 `c6fd9cfb625ce95f1dd27e05f70fa72c48309530fc0d994133e7816455bce034`，远端附件均匹配。
 
 ## 2026-10-18 动作节奏与状态辨识
 

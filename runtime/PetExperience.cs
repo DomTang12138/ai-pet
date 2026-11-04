@@ -921,7 +921,7 @@ namespace AIPet.Desktop
         {
             string folder = CreationFolder(id);
             return "请使用 $ai-pet Skill 制作这份桌宠动作请求。\r\n"
-                + "Skill 来源：https://github.com/tanghuanqiang/ai-pet/tree/main/skills/ai-pet\r\n"
+                + "Skill 来源：https://github.com/DomTang12138/ai-pet/tree/main/skills/ai-pet\r\n"
                 + "创作编号：" + id + "\r\n"
                 + "请求文件：" + Path.Combine(folder, "request.json") + "\r\n"
                 + "桌宠程序：" + System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName + "\r\n"

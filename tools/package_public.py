@@ -27,8 +27,11 @@ def main() -> None:
                     str(ROOT / 'runtime/build.ps1'), '-Public'], cwd=ROOT, check=True)
     for name in ['AIPetDesktop.exe', 'AIPetDesktop.exe.config', 'reference-cat.jpg', 'public-default.lotheme']:
         shutil.copy2(ROOT / 'runtime/public-publish' / name, stage / name)
-    for name in ['README.md', 'IMPLEMENTATION-PLAN.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md']:
-        shutil.copy2(ROOT / name, stage / name)
+    for name in ['README.md', 'IMPLEMENTATION-PLAN.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md',
+                 'docs/media/ai-pet-codex-demo.gif', 'docs/media/ai-pet-action-preview.png']:
+        target = stage / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, target)
     shutil.copy2(ROOT / 'runtime/install-public.ps1', stage / 'install.ps1')
     (stage / 'tools').mkdir()
     shutil.copy2(ROOT / 'tools/ai-pet.ps1', stage / 'tools/ai-pet.ps1')
