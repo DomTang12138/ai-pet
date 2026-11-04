@@ -14,6 +14,19 @@
 
 ## 安装和启动
 
+### 让 Agent 帮你安装
+
+把下面整段复制到你在 Windows 电脑上使用的 Agent 聊天窗口里发送。
+
+```text
+请帮我在这台 Windows 电脑上安装并启动 AI-PET 桌宠。
+从 https://github.com/tanghuanqiang/ai-pet/releases 选择最新发布的 Windows x64 版本（包括预发布版），下载该版本的 Windows 安装包 ZIP。
+解压后，按照包内 skills/ai-pet/SKILL.md 的说明运行 install.ps1 -Start。如果已经安装了这个版本，直接启动即可。
+请确认桌宠进程正在运行，再告诉我安装的版本，以及怎么从系统托盘打开桌宠菜单。
+```
+
+### 手动安装或从源码运行
+
 Windows 10/11，需 .NET Framework 4.8 或更新的桌面组件；安装器会先检查，缺少时不修改现有作品。
 
 界面保留现有 C# / WPF 运行环境，直接调用 Windows DWM 系统材质，无需额外安装 WinUI 或 Windows App SDK。系统材质依赖 Windows 11 22621 或更新版本；旧系统仍可使用统一的控件样式。系统设置变化会更新已打开的窗口，管理窗口也可通过 `AIPetDesktop.exe --settings` 打开（已有实例请从托盘进入）。
