@@ -1,6 +1,6 @@
 # Optional automatic generation
 
-The default route hands a saved request to the user's existing Agent: **交给我的 Agent 制作** copies exact request instructions, and the user pastes them into their conversation. The accompanying `agent-instructions.txt` also remains in the request directory. The Agent reads the request, uses its available generation tools, packages the frames and submits `result`; the native manager detects the candidate for preview. This does not require configuring a runner or installing local models.
+The default route hands a saved request to the user's existing Agent: **复制给 Agent 的制作说明** copies exact request instructions, and the user pastes them into their conversation. The accompanying `agent-instructions.txt` also remains in the request directory. The Agent reads the request, uses its available generation tools, packages the frames and submits `result`; the native manager detects the candidate for preview. This does not require configuring a runner or installing local models.
 
 Use the following optional integration when the user has an existing command-line generation tool. Keep executable paths and model setup in the Agent workflow. A configured runner is independent of the five AI task states. Verify the selected Agent's actual generation tools before configuring automation; a task-state adapter or a CLI that accepts reference images does not alone prove generation capability.
 

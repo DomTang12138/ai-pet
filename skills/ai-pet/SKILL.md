@@ -1,6 +1,6 @@
 ---
 name: ai-pet
-description: Install, start, configure, and connect the AI-PET Windows desktop companion to an agent or AI tool, or help create custom pet actions from photos and a prompt. Use for this project's desktop pet, not real animal care or ChatGPT Work Pets.
+description: Install, start, configure, and connect the AI-PET Windows desktop companion to an agent or AI tool. Create custom actions from photos and a prompt or extract real pet motion from a video with foreground masks. Use for this project's desktop pet, not real animal care or ChatGPT Work Pets.
 ---
 
 # AI-PET
@@ -47,7 +47,9 @@ For Codex, read [the Codex adapter instructions](references/codex.md). Use `-Act
 
 ## Customize
 
-The default creation route is the user's existing Agent and generation tools. The native **自定义宠物和动作** page accepts 1–4 photos and a prompt. **交给我的 Agent 制作** saves the request and copies instructions for the user to paste into their Agent conversation. It does not launch or message an Agent. Use the exact request ID, executable and data directory in those instructions; they take precedence over choosing the newest request. No local model installation is required for this route.
+For a pet video or a `pet-video-cutout` request, follow [video action extraction](references/video-actions.md). Use the selected clip's actual frames and the exact video request ID. Return the transparent motion to the video preview for the selected action slot.
+
+The default creation route is the user's existing Agent and generation tools. The native **自定义宠物和动作** page accepts 1–4 photos and a prompt. **复制给 Agent 的制作说明** saves the request and copies instructions for the user to paste into their Agent conversation. It does not launch or message an Agent. Use the exact request ID, executable and data directory in those instructions; they take precedence over choosing the newest request. No local model installation is required for this route.
 
 To process a pending request, run:
 

@@ -117,7 +117,7 @@ namespace AIPet.Desktop
                 }
             } catch (Exception) { }
             return new { version = 1, states = AiStates, tool = connectedAiTool, session = connectedAiSession,
-                generationProtocolVersion = 1, generator = generator, defaultCreationMode = generator == null ? "agent-handoff" : "configured-generator",
+                videoExtractionProtocolVersion = 1, generationProtocolVersion = 1, generator = generator, defaultCreationMode = generator == null ? "agent-handoff" : "configured-generator",
                 codexDesktop = new { displayedInputRequests = true, permissionPrompts = false, proseQuestions = false, agentReportedStates = true },
                 codexFollow = AutomaticCodexStatus(),
                 bindings = aiBindings, actions = actions, lastState = lastAiState, lastOutcome = lastAiOutcome,
@@ -142,7 +142,8 @@ namespace AIPet.Desktop
             if (!args[0].StartsWith("--ai-", StringComparison.Ordinal)) return false;
             try
             {
-                if (args[0] == "--ai-codex-hook" && args.Length == 1) RecordSimpleCodexHook();
+                if (HandleVideoRequestCommand(args)) { }
+                else if (args[0] == "--ai-codex-hook" && args.Length == 1) RecordSimpleCodexHook();
                 else if (args[0] == "--ai-test-appearance" && args.Length == 2) TestModernAppearance(Path.GetFullPath(args[1]));
                 else if (args[0] == "--ai-test-session-titles" && args.Length == 2) TestCodexSessionTitles(Path.GetFullPath(args[1]));
                 else if (args[0] == "--ai-test-codex-auto" && args.Length == 2) TestAutomaticCodex(Path.GetFullPath(args[1]));
@@ -282,6 +283,7 @@ namespace AIPet.Desktop
                 foreach (CodexWatch watch in codexWatches.Values) if (watch.Hash == connectedAiSession && timestamp < watch.SignalAt) return false;
             seenAiEventOrder.Enqueue(id);
             if (seenAiEventOrder.Count > 512) seenAiEvents.Remove(seenAiEventOrder.Dequeue());
+            string previousState = lastAiState;
             lastAiState = state;
             ObserveAutomaticAgentState(state, timestamp);
             string slot = aiBindings[state];
@@ -289,9 +291,15 @@ namespace AIPet.Desktop
             else if (IsWithinQuietHours(preferences, DateTime.Now.TimeOfDay)) lastAiOutcome = "quiet-hours";
             else if (activeTheme == null || activeTheme.FindAction(slot) == null) lastAiOutcome = "action-unavailable";
             else {
+                // Activity events are heartbeats, not new animation requests.
+                // Preserve the clock instead of repeatedly showing the first frames.
+                bool continuing = (state == "running" && (previousState == "running" || previousState == "started") ||
+                    state == "needs-user" && previousState == "needs-user") && activeThemeAction != null &&
+                    activeThemeAction.Slot == slot && themeTimer != null && themeTimer.IsEnabled;
                 activeThemeOneShot = false;
-                lastAiOutcome = SetThemeAction(slot, slot != "idle" && state != "running") ? "played" : "action-unavailable";
+                lastAiOutcome = continuing || SetThemeAction(slot, slot != "idle" && state != "running") ? "played" : "action-unavailable";
             }
+            UpdatePetActivityCue();
             return true;
         }
 
@@ -303,6 +311,7 @@ namespace AIPet.Desktop
                 ReloadAiConnection();
                 PollAutomaticCodex(CurrentUnixMilliseconds());
                 if (connectedAiTool == null) {
+                    UpdatePetActivityCue();
                     UpdateCodexFollowTooltip();
                     Directory.CreateDirectory(experienceRoot);
                     WriteCodexEventAtomically(Path.Combine(experienceRoot, "ai-status.json"), new JavaScriptSerializer().Serialize(AiCapabilities()));
@@ -324,6 +333,7 @@ namespace AIPet.Desktop
                     catch (Exception) { }
                 }
                 UpdateCodexFollowTooltip();
+                UpdatePetActivityCue();
                 Directory.CreateDirectory(experienceRoot);
                 WriteCodexEventAtomically(Path.Combine(experienceRoot, "ai-status.json"), new JavaScriptSerializer().Serialize(AiCapabilities()));
             }
@@ -331,6 +341,7 @@ namespace AIPet.Desktop
                 bool wasConnected = connectedAiTool != null;
                 connectedAiTool = connectedAiSession = aiConfigurationText = null; lastAiOutcome = "invalid-config";
                 if (wasConnected) ResetConnectedPlayback();
+                UpdatePetActivityCue();
             }
         }
 
@@ -414,6 +425,205 @@ namespace AIPet.Desktop
             page.Children.Add(ManagerText(title, true)); page.Children.Add(ManagerText(description, false)); return page;
         }
 
+        private static bool resumePhotoDraft;
+
+        private sealed class PhotoCreationPanel : StackPanel
+        {
+            private readonly StackPanel summary = new StackPanel(), draft = new StackPanel(), details = new StackPanel();
+            private readonly WrapPanel thumbnails = new WrapPanel(), commands = new WrapPanel();
+            private readonly TextBlock status = ManagerText("", false), count = ManagerText("", false), hint = ManagerText("", false);
+            private readonly TextBlock requestTitle = ManagerText("", false);
+            private string displayedRequest;
+            private readonly TextBox prompt;
+            private readonly Button add, submit, preview, copy, retry, cancel, edit;
+            private readonly Expander history;
+            private bool editing, running, configured;
+            private int maxPhotos = 4;
+
+            public PhotoCreationPanel(string savedPrompt, Window owner)
+            {
+                editing = latestCreationRequest == null || resumePhotoDraft;
+                requestTitle.TextWrapping = TextWrapping.NoWrap; requestTitle.TextTrimming = TextTrimming.CharacterEllipsis;
+                requestTitle.FontWeight = FontWeights.SemiBold; requestTitle.Margin = new Thickness(0, 0, 0, 3);
+                Children.Add(summary); summary.Children.Add(requestTitle); summary.Children.Add(status); summary.Children.Add(commands);
+                preview = ManagerButton("预览生成的动作…", delegate { ImportCreationCandidate(LatestCreationCandidate()); });
+                copy = ManagerButton("再次复制制作说明", delegate { CopyCreationHandoff(latestCreationRequest); status.Text = "已复制，可以粘贴到你的 Agent。"; });
+                retry = ManagerButton("重试生成", delegate { StartGeneration(latestCreationRequest); Refresh(); });
+                cancel = ManagerButton("取消生成", delegate {
+                    File.WriteAllText(Path.Combine(CreationFolder(latestCreationRequest), "cancel-generation"), "cancel");
+                    status.Text = "正在取消生成…";
+                });
+                edit = ManagerButton("制作另一个动作", delegate { editing = !editing; Refresh(); });
+                foreach (Button button in new[] { preview, copy, retry, cancel, edit }) commands.Children.Add(button);
+                Children.Add(draft);
+                add = ManagerButton("选择参考照片…", PickPhotos); draft.Children.Add(add);
+                draft.Children.Add(thumbnails); draft.Children.Add(count);
+                StackPanel description = new StackPanel(); draft.Children.Add(description);
+                description.Children.Add(ManagerText("希望宠物做什么动作？", false));
+                prompt = new TextBox { Text = savedPrompt ?? "", AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 72,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxLength = 2000, Margin = new Thickness(0, 0, 0, 8) };
+                System.Windows.Automation.AutomationProperties.SetName(prompt, "动作描述");
+                description.Children.Add(prompt); description.Children.Add(hint);
+                submit = ManagerButton("生成动作", Submit);
+                System.Windows.Automation.AutomationProperties.SetAutomationId(submit, "PhotoSubmit");
+                description.Children.Add(submit);
+                prompt.TextChanged += delegate { UpdateDraft(); };
+                history = new Expander { Header = "之前做好的动作", Margin = new Thickness(0, 2, 0, 10) };
+                history.Expanded += delegate { LoadHistory(); }; Children.Add(history);
+                details.Children.Add(ManagerButton("打开本机眨眼、歪头模板", OpenSimpleCreator));
+                Children.Add(new Expander { Header = "本机动作模板", Content = details, Margin = new Thickness(0, 0, 0, 10) });
+                RenderPhotos(); Refresh();
+                var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                timer.Tick += delegate { if (IsVisible) Refresh(); };
+                timer.Start();
+                owner.Closed += delegate { timer.Stop(); resumePhotoDraft = editing; creationDraftPrompt = prompt.Text; };
+            }
+
+            private void PickPhotos()
+            {
+                using (Forms.OpenFileDialog picker = new Forms.OpenFileDialog()) {
+                    picker.Filter = "宠物照片|*.png;*.jpg;*.jpeg"; picker.Multiselect = true;
+                    if (picker.ShowDialog() != Forms.DialogResult.OK) return;
+                    List<string> additions = new List<string>();
+                    HashSet<string> paths = new HashSet<string>(creationPhotos, StringComparer.OrdinalIgnoreCase);
+                    foreach (string file in picker.FileNames) if (paths.Add(file)) additions.Add(file);
+                    if (creationPhotos.Count + additions.Count > maxPhotos)
+                        throw new InvalidDataException("最多可以使用 " + maxPhotos + " 张照片。请减少本次选择，或先移除已有照片。");
+                    foreach (string file in additions) ValidateCreationPhoto(file);
+                    creationPhotos.AddRange(additions);
+                    RenderPhotos(); UpdateDraft();
+                }
+            }
+
+            private void RenderPhotos()
+            {
+                thumbnails.Children.Clear();
+                foreach (string file in creationPhotos) {
+                    string path = file, name = Path.GetFileName(path);
+                    StackPanel tile = new StackPanel { Width = 82, Margin = new Thickness(0, 0, 8, 4) };
+                    Image image = new Image { Width = 78, Height = 60, Stretch = Stretch.Uniform, ToolTip = name };
+                    try {
+                        using (FileStream data = File.OpenRead(path)) {
+                            BitmapFrame original = BitmapDecoder.Create(data, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None).Frames[0];
+                            bool wide = original.PixelWidth >= original.PixelHeight;
+                            data.Position = 0;
+                            BitmapImage thumb = new BitmapImage(); thumb.BeginInit(); thumb.CacheOption = BitmapCacheOption.OnLoad;
+                            if (wide) thumb.DecodePixelWidth = 100; else thumb.DecodePixelHeight = 100;
+                            thumb.StreamSource = data; thumb.EndInit(); thumb.Freeze(); image.Source = thumb;
+                        }
+                    } catch (IOException) { image.ToolTip = "照片无法读取，请重新选择。"; }
+                      catch (UnauthorizedAccessException) { image.ToolTip = "照片无法读取，请重新选择。"; }
+                      catch (NotSupportedException) { image.ToolTip = "照片格式无法读取，请重新选择。"; }
+                      catch (FileFormatException) { image.ToolTip = "照片格式无法读取，请重新选择。"; }
+                    tile.Children.Add(image);
+                    TextBlock caption = new TextBlock { Text = name, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = name, FontSize = 11 };
+                    caption.SetResourceReference(TextBlock.ForegroundProperty, "PetMuted"); tile.Children.Add(caption);
+                    Button remove = ManagerButton("移除", delegate { creationPhotos.Remove(path); RenderPhotos(); UpdateDraft(); });
+                    remove.ToolTip = "移除 " + name;
+                    System.Windows.Automation.AutomationProperties.SetName(remove, "移除 " + name);
+                    remove.Padding = new Thickness(8, 2, 8, 2); remove.MinHeight = 26; remove.Margin = new Thickness(0, 4, 0, 0);
+                    tile.Children.Add(remove); thumbnails.Children.Add(tile);
+                }
+            }
+
+            private void UpdateDraft()
+            {
+                bool hasPhotos = creationPhotos.Count > 0;
+                ((StackPanel)prompt.Parent).Visibility = hasPhotos ? Visibility.Visible : Visibility.Collapsed;
+                count.Text = hasPhotos ? String.Format("已选 {0} / {1} 张照片", creationPhotos.Count, maxPhotos) : "可选择 1–" + maxPhotos + " 张照片。";
+                add.Content = hasPhotos ? "继续添加照片…" : "选择参考照片…";
+                add.Visibility = creationPhotos.Count >= maxPhotos ? Visibility.Collapsed : Visibility.Visible;
+                add.SetResourceReference(FrameworkElement.StyleProperty, hasPhotos ? (object)typeof(Button) : "PetPrimary");
+                submit.IsEnabled = !running && hasPhotos && creationPhotos.Count <= maxPhotos && !String.IsNullOrWhiteSpace(prompt.Text);
+                submit.SetResourceReference(FrameworkElement.StyleProperty, "PetPrimary");
+            }
+
+            private void Submit()
+            {
+                if (running) return;
+                latestCreationRequest = SaveCreationRequest(creationPhotos, prompt.Text);
+                editing = false; history.IsExpanded = false;
+                try {
+                    if (configured) StartGeneration(latestCreationRequest);
+                    else CopyCreationHandoff(latestCreationRequest);
+                } finally { Refresh(); }
+            }
+
+            private void Refresh()
+            {
+                try {
+                    string config = Path.Combine(experienceRoot, "generator.json");
+                    configured = File.Exists(config);
+                    maxPhotos = 4;
+                    if (configured) {
+                        Dictionary<string, object> backend = ReadGenerator(config);
+                        maxPhotos = Convert.ToInt32(backend["maxReferences"], CultureInfo.InvariantCulture);
+                        hint.Text = "使用 " + ReadString(backend, "name") + "。 " + ReadString(backend, "dataHandling");
+                    } else hint.Text = "例如「抬起右爪，向我挥两下」。复制制作说明后，粘贴给你的 Agent。";
+                    submit.Content = configured ? "生成动作" : "复制给 Agent 的制作说明";
+                    if (latestCreationRequest == null) latestCreationRequest = LatestCreationId();
+                    bool hasRequest = latestCreationRequest != null;
+                    summary.Visibility = hasRequest ? Visibility.Visible : Visibility.Collapsed;
+                    if (!hasRequest) history.Visibility = Visibility.Collapsed;
+                    if (hasRequest && latestCreationRequest != displayedRequest) {
+                        string folder = CreationFolder(latestCreationRequest);
+                        var request = new JavaScriptSerializer().DeserializeObject(ReadBoundedJson(Path.Combine(folder, "request.json"))) as Dictionary<string, object>;
+                        string description = (ReadString(request, "prompt") ?? "").Replace("\r", " ").Replace("\n", " ");
+                        requestTitle.Text = "上次制作 · " + description; requestTitle.ToolTip = description;
+                        bool hasOtherRequest = false;
+                        foreach (string sibling in Directory.EnumerateDirectories(Path.GetDirectoryName(folder))) {
+                            if (sibling != folder && File.Exists(Path.Combine(sibling, "request.json"))) { hasOtherRequest = true; break; }
+                        }
+                        history.Visibility = hasOtherRequest ? Visibility.Visible : Visibility.Collapsed;
+                        displayedRequest = latestCreationRequest;
+                    }
+                    draft.Visibility = editing || !hasRequest ? Visibility.Visible : Visibility.Collapsed;
+                    running = false;
+                    if (hasRequest) {
+                        JavaScriptSerializer json = new JavaScriptSerializer();
+                        var state = json.DeserializeObject(json.Serialize(GenerationStatus(latestCreationRequest))) as Dictionary<string, object>;
+                        string kind = ReadString(state, "status");
+                        bool ready = kind == "ready";
+                        running = state.ContainsKey("running") && (bool)state["running"];
+                        status.Text = ready ? "动作已做好，可以预览。" : !configured && kind == "pending"
+                            ? "等待 Agent 制作。将制作说明粘贴给它，完成后在这里预览。" : ReadString(state, "message");
+                        preview.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
+                        copy.Visibility = !ready && !running && !configured ? Visibility.Visible : Visibility.Collapsed;
+                        cancel.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+                        retry.Visibility = !ready && !running && configured ? Visibility.Visible : Visibility.Collapsed;
+                        retry.Content = kind == "pending" ? "生成这个动作" : "重试生成";
+                        edit.Content = editing ? "收起制作草稿" : "制作另一个动作";
+                        preview.SetResourceReference(FrameworkElement.StyleProperty, editing ? (object)typeof(Button) : "PetPrimary");
+                    }
+                    UpdateDraft();
+                } catch (Exception error) { summary.Visibility = Visibility.Visible; status.Text = error.Message; submit.IsEnabled = false; }
+            }
+
+            private void LoadHistory()
+            {
+                StackPanel list = new StackPanel();
+                string root = Path.Combine(experienceRoot, "creation-requests");
+                if (Directory.Exists(root)) {
+                    string[] folders = Directory.GetDirectories(root);
+                    Array.Sort(folders, delegate(string a, string b) { return Directory.GetCreationTimeUtc(b).CompareTo(Directory.GetCreationTimeUtc(a)); });
+                    foreach (string folder in folders) {
+                        string id = Path.GetFileName(folder), candidate = Path.Combine(folder, "candidate.lotheme");
+                        if (id == latestCreationRequest || !Regex.IsMatch(id, @"\A[a-f0-9]{32}\z") || !File.Exists(candidate)) continue;
+                        try {
+                            var request = new JavaScriptSerializer().DeserializeObject(ReadBoundedJson(Path.Combine(folder, "request.json"))) as Dictionary<string, object>;
+                            string description = (ReadString(request, "prompt") ?? "").Replace("\r", " ").Replace("\n", " ");
+                            string when = Directory.GetCreationTime(folder).ToString("MM-dd HH:mm");
+                            Button item = ManagerButton(when + "  " + description, delegate { ImportCreationCandidate(candidate); });
+                            item.Content = new TextBlock { Text = (string)item.Content, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 380 };
+                            item.ToolTip = description; list.Children.Add(item);
+                        } catch (IOException) { continue; } catch (ArgumentException) { continue; } catch (InvalidOperationException) { continue; }
+                    }
+                }
+                if (list.Children.Count == 0) list.Children.Add(ManagerText("还没有更早的已完成动作。", false));
+                history.Content = list;
+            }
+        }
+
         private static void ShowPetManager(int tab)
         {
             if (petManager != null)
@@ -431,194 +641,93 @@ namespace AIPet.Desktop
                     string folder = CreationFolder(latestCreationRequest);
                     Dictionary<string, object> saved = new JavaScriptSerializer().DeserializeObject(ReadBoundedJson(Path.Combine(folder, "request.json"))) as Dictionary<string, object>;
                     savedCreationPrompt = creationDraftPrompt ?? ReadString(saved, "prompt");
-                    if (creationPhotos.Count == 0) foreach (Dictionary<string, object> photo in (object[])saved["references"]) {
+                    if (creationDraftPrompt == null && creationPhotos.Count == 0) foreach (Dictionary<string, object> photo in (object[])saved["references"]) {
                         string name = ReadString(photo, "path");
                         if (Regex.IsMatch(name, @"\Areference-[1-4]\.(png|jpg|jpeg)\z")) creationPhotos.Add(Path.Combine(folder, name));
                     }
                 } catch (Exception) { }
             }
-            StackPanel custom = ManagerPage("自定义宠物和动作", "添加照片，写下想让它做的动作。预览满意后，再换到桌面上。");
-            TextBlock photoCount = ManagerText(creationPhotos.Count == 0 ? "选择 1–4 张参考图片" : "已选择 " + creationPhotos.Count + " 张图片", false);
-            custom.Children.Add(ManagerButton("添加参考图片…", delegate {
-                using (Forms.OpenFileDialog picker = new Forms.OpenFileDialog()) {
-                    picker.Filter = "宠物图片|*.png;*.jpg;*.jpeg"; picker.Multiselect = true;
-                    if (picker.ShowDialog() != Forms.DialogResult.OK) return;
-                    if (picker.FileNames.Length > 4) throw new InvalidDataException("最多选择四张参考图片。");
-                    if (File.Exists(Path.Combine(experienceRoot, "generator.json"))) {
-                        int maximum = Convert.ToInt32(ReadGenerator(Path.Combine(experienceRoot, "generator.json"))["maxReferences"], CultureInfo.InvariantCulture);
-                        if (picker.FileNames.Length > maximum) throw new InvalidDataException("当前生成器最多支持 " + maximum + " 张图片；也可以让 Agent 配置支持更多参考图的生成器。");
-                    }
-                    foreach (string photo in picker.FileNames) ValidateCreationPhoto(photo);
-                    creationPhotos.Clear(); creationPhotos.AddRange(picker.FileNames);
-                    photoCount.Text = "已选择 " + creationPhotos.Count + " 张图片";
+            StackPanel customPage = ManagerPage("自定义宠物和动作", "用照片和描述制作动作，或从拍摄的视频中提取真实动作。");
+            StackPanel custom = new StackPanel();
+            AddVideoSourcePicker(customPage, custom);
+            custom.Children.Add(new PhotoCreationPanel(savedCreationPrompt, petManager));
+            Expander library = new Expander { Header = "我的动作与主题", Margin = new Thickness(0, 12, 0, 0) };
+            library.Expanded += delegate {
+                StackPanel content = new StackPanel();
+                WrapPanel actionButtons = new WrapPanel();
+                if (activeTheme != null) foreach (ThemeAction action in activeTheme.Actions) {
+                    string slot = action.Slot;
+                    actionButtons.Children.Add(ManagerButton(SimpleActionLabel(slot), delegate { ShowWindow(); activeThemeOneShot = false; SetThemeAction(slot, slot != "idle"); }));
                 }
-            }));
-            custom.Children.Add(photoCount);
-            TextBox creationPrompt = new TextBox { Text = savedCreationPrompt, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 90,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxLength = 2000, Margin = new Thickness(0, 0, 0, 12) };
-            custom.Children.Add(ManagerText("描述想要的宠物和动作", false)); custom.Children.Add(creationPrompt);
-            petManager.Closed += delegate { creationDraftPrompt = creationPrompt.Text; };
-            TextBlock generatorDescription = ManagerText("", false); custom.Children.Add(generatorDescription);
-            TextBlock creationStatus = ManagerText("添加图片和描述后，交给自己的 Agent 制作。", false);
-            Button generate = null;
-            generate = ManagerButton("生成动作", delegate {
-                try {
-                    bool configured = File.Exists(Path.Combine(experienceRoot, "generator.json"));
-                    if (configured) ReadGenerator(Path.Combine(experienceRoot, "generator.json"));
-                    latestCreationRequest = SaveCreationRequest(creationPhotos, creationPrompt.Text);
-                    if (configured) {
-                        StartGeneration(latestCreationRequest); generate.IsEnabled = false; creationStatus.Text = "正在启动生成…";
-                    } else {
-                        CopyCreationHandoff(latestCreationRequest);
-                        creationStatus.Text = "制作说明已复制，粘贴给你的 Agent 即可；完成后回到这里预览。";
-                    }
-                } catch (Exception error) { creationStatus.Text = error.Message; }
-            });
-            custom.Children.Add(generate);
-            generate.SetResourceReference(FrameworkElement.StyleProperty, "PetPrimary");
-            custom.Children.Add(creationStatus);
-            WrapPanel generationControls = new WrapPanel();
-            Button retry = ManagerButton("重试生成", delegate {
-                try { StartGeneration(latestCreationRequest); creationStatus.Text = "正在重新生成…"; }
-                catch (Exception error) { creationStatus.Text = error.Message; }
-            });
-            Button cancel = ManagerButton("取消生成", delegate {
-                try { File.WriteAllText(Path.Combine(CreationFolder(latestCreationRequest), "cancel-generation"), "cancel"); creationStatus.Text = "正在取消…"; }
-                catch (Exception error) { creationStatus.Text = error.Message; }
-            });
-            Button creationResult = ManagerButton("预览生成的动作…", delegate {
-                string request = LatestCreationCandidate();
-                if (request == null) throw new InvalidOperationException("还没有可预览的生成结果。");
-                ImportCreationCandidate(request);
-            });
-            creationResult.IsEnabled = LatestCreationCandidate() != null;
-            retry.Visibility = cancel.Visibility = Visibility.Collapsed;
-            generationControls.Children.Add(creationResult); generationControls.Children.Add(cancel); generationControls.Children.Add(retry);
-            custom.Children.Add(generationControls);
-            StackPanel agentGeneration = new StackPanel();
-            agentGeneration.Children.Add(ManagerButton("复制制作说明", delegate {
-                try {
-                    if (latestCreationRequest == null) latestCreationRequest = SaveCreationRequest(creationPhotos, creationPrompt.Text);
-                    CopyCreationHandoff(latestCreationRequest);
-                    creationStatus.Text = "制作说明已复制，粘贴给你的 Agent 即可。";
-                } catch (Exception error) { creationStatus.Text = error.Message; }
-            }));
-            Expander agentInstructions = new Expander { Header = "制作说明", Content = agentGeneration, Margin = new Thickness(0, 0, 0, 12) };
-            custom.Children.Add(agentInstructions);
-            System.Windows.Threading.DispatcherTimer creationRefresh = new System.Windows.Threading.DispatcherTimer();
-            creationRefresh.Interval = TimeSpan.FromSeconds(2);
-            Action refreshCreation = delegate {
-                try {
-                    bool configured = File.Exists(Path.Combine(experienceRoot, "generator.json"));
-                    if (configured) {
-                        Dictionary<string, object> backend = ReadGenerator(Path.Combine(experienceRoot, "generator.json"));
-                        generatorDescription.Text = "生成器：" + ReadString(backend, "name") + "（最多 " + backend["maxReferences"] + " 张参考图）· " + ReadString(backend, "dataHandling");
-                    } else generatorDescription.Text = "默认交给自己的 Agent：复制制作说明，粘贴到它的会话。无需安装本机模型。";
-                    generate.Content = configured ? "生成动作" : "交给我的 Agent 制作";
-                    if (latestCreationRequest == null) latestCreationRequest = LatestCreationId();
-                    bool running = false;
-                    if (latestCreationRequest != null) {
-                        JavaScriptSerializer serializer = new JavaScriptSerializer();
-                        Dictionary<string, object> state = serializer.DeserializeObject(serializer.Serialize(GenerationStatus(latestCreationRequest))) as Dictionary<string, object>;
-                        running = state.ContainsKey("running") && (bool)state["running"];
-                        string status = ReadString(state, "status");
-                        if (configured) generate.Content = status == "ready" ? "重新生成" : "生成动作";
-                        else generate.Content = status == "ready" ? "制作新的动作" : "交给我的 Agent 制作";
-                        creationStatus.Text = !configured && status == "pending" ? "等待 Agent 制作；把制作说明粘贴给它，完成后回来预览。" : ReadString(state, "message");
-                        creationResult.IsEnabled = status == "ready";
-                        cancel.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
-                        retry.Content = status == "pending" ? "生成这个请求" : "重试生成";
-                        retry.Visibility = configured && !running && status != "ready" ? Visibility.Visible : Visibility.Collapsed;
-                    }
-                    generate.IsEnabled = !running;
-                    agentInstructions.Visibility = latestCreationRequest != null || configured ? Visibility.Visible : Visibility.Collapsed;
-                } catch (Exception error) { creationResult.IsEnabled = false; creationStatus.Text = error.Message; }
+                if (actionButtons.Children.Count > 0) content.Children.Add(actionButtons);
+                content.Children.Add(ManagerButton("导入已有主题…", ImportThemePackage));
+                library.Content = content;
             };
-            creationRefresh.Tick += delegate { refreshCreation(); }; refreshCreation();
-            creationRefresh.Start(); petManager.Closed += delegate { creationRefresh.Stop(); };
-            Expander localCreator = new Expander { Header = "使用本机眨眼、歪头模板", Content = ManagerButton("打开创作空间", OpenSimpleCreator), Margin = new Thickness(0, 0, 0, 12) };
-            custom.Children.Add(localCreator);
-            custom.Children.Add(ManagerButton("使用已有宠物主题…", ImportThemePackage));
-            custom.Children.Add(ManagerText("当前动作", true));
-            WrapPanel actionButtons = new WrapPanel();
-            if (activeTheme != null) foreach (ThemeAction action in activeTheme.Actions)
-            {
-                string slot = action.Slot;
-                actionButtons.Children.Add(ManagerButton(SimpleActionLabel(slot), delegate { ShowWindow(); activeThemeOneShot = false; SetThemeAction(slot, slot != "idle"); }));
-            }
-            else custom.Children.Add(ManagerText("还没有安装动作。可以先创作，或导入已有主题。", false));
-            custom.Children.Add(actionButtons);
-            AddManagerTab("自定义", custom);
+            customPage.Children.Add(library);
+            AddManagerTab("自定义", customPage);
 
             StackPanel connection = ManagerPage("连接 AI 工具", "自动跟随任务，也可以固定一段会话。");
             CheckBox automaticFollow = new CheckBox { Content = "自动跟随正在运行的 Codex 会话", IsChecked = codexFollowMode == "auto", Margin = new Thickness(0, 0, 0, 16) };
             bool syncingFollow = false;
             automaticFollow.Checked += delegate { if (!syncingFollow) SetCodexFollowMode("auto"); };
             automaticFollow.Unchecked += delegate { if (!syncingFollow) SetCodexFollowMode(connectedAiTool == null ? "off" : "manual"); };
-            connection.Children.Add(automaticFollow);
             TextBlock connectionStatus = ManagerText("", false);
             connectionStatus.Margin = new Thickness(0);
-            Border connectionCard = new Border { CornerRadius = new CornerRadius(8), Padding = new Thickness(16), Margin = new Thickness(0, 0, 0, 20), Child = connectionStatus };
+            TextBlock currentSession = new TextBlock { FontSize = 16, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,5) };
+            StackPanel current = new StackPanel(); current.Children.Add(currentSession); current.Children.Add(connectionStatus);
+            Border connectionCard = new Border { CornerRadius = new CornerRadius(8), Padding = new Thickness(16), Margin = new Thickness(0, 0, 0, 16), Child = current };
             connectionCard.SetResourceReference(Border.BackgroundProperty, "PetSelected");
-            connection.Children.Add(connectionCard);
+            connection.Children.Add(connectionCard); connection.Children.Add(automaticFollow);
+            Button disconnect = ManagerButton("断开当前连接", delegate {
+                SaveAiConnection(null, null); selectedCodexSession = null; selectedDesktopRolloutPath = null; ClearDesktopSelection(); ResetConnectedPlayback();
+            });
+            TextBlock connectionDetails = ManagerText("", false);
+            Expander details = new Expander { Header = "连接详情", Margin = new Thickness(0, 0, 0, 10) };
+            StackPanel diagnostics = new StackPanel(); diagnostics.Children.Add(connectionDetails); diagnostics.Children.Add(disconnect);
+            details.Content = diagnostics;
             System.Windows.Threading.DispatcherTimer connectionRefresh = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             Action refreshConnection = delegate {
                 syncingFollow = true; automaticFollow.IsChecked = codexFollowMode == "auto"; syncingFollow = false;
-                connectionStatus.Text = FriendlyConnectionStatus();
+                currentSession.Text = CurrentConnectionHeading();
+                connectionStatus.Text = ConnectionOverview();
+                disconnect.Visibility = connectedAiTool != null ? Visibility.Visible : Visibility.Collapsed;
+                if (details.IsExpanded) connectionDetails.Text = FriendlyConnectionStatus();
             };
+            details.Expanded += delegate { refreshConnection(); };
             connectionRefresh.Tick += delegate { refreshConnection(); }; refreshConnection(); connectionRefresh.Start();
             petManager.Closed += delegate { connectionRefresh.Stop(); };
-            Expander agentSetup = new Expander { Header = "其他工具：让 Agent 连接，或手动填写", Margin = new Thickness(0, 0, 0, 12) };
+            Expander agentSetup = new Expander { Header = "连接其他 AI 工具", Margin = new Thickness(0, 0, 0, 10) };
             StackPanel agentFields = new StackPanel();
-            TextBox toolInput = new TextBox { Text = connectedAiTool ?? "my-agent", Margin = new Thickness(0, 0, 0, 10) };
-            TextBox sessionInput = new TextBox { Text = connectedAiSession ?? "my-task", Margin = new Thickness(0, 0, 0, 12) };
+            bool customTool = connectedAiTool != null && connectedAiTool != "codex";
+            TextBox toolInput = new TextBox { Text = customTool ? connectedAiTool : "", Margin = new Thickness(0, 0, 0, 10) };
+            TextBox sessionInput = new TextBox { Text = customTool ? connectedAiSession : "", Margin = new Thickness(0, 0, 0, 12) };
+            agentFields.Children.Add(ManagerText("填写你的 Agent 提供的两个标识。", false));
             agentFields.Children.Add(ManagerText("工具标识", false)); agentFields.Children.Add(toolInput);
             agentFields.Children.Add(ManagerText("任务 / 会话标识", false)); agentFields.Children.Add(sessionInput);
-            agentFields.Children.Add(ManagerButton("连接", delegate {
+            Button connectOther = ManagerButton("连接这个工具", delegate {
                 SaveAiConnection(toolInput.Text.Trim(), sessionInput.Text.Trim());
                 selectedCodexSession = null; selectedDesktopRolloutPath = null; ClearDesktopSelection();
-                connectionStatus.Text = "已连接：" + connectedAiTool + " / " + connectedAiSession;
-            }));
+                refreshConnection();
+            });
+            Action validateTool = delegate { connectOther.IsEnabled = ValidAiId(toolInput.Text.Trim()) && ValidAiId(sessionInput.Text.Trim()); };
+            toolInput.TextChanged += delegate { validateTool(); }; sessionInput.TextChanged += delegate { validateTool(); };
+            validateTool(); agentFields.Children.Add(connectOther);
             agentSetup.Content = agentFields;
-            Expander codexSetup = new Expander { Header = "可连接的本机会话", Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 0, 12) };
-            connection.Children.Add(ManagerButton("手动固定一个 Codex 会话…", delegate {
+            Expander codexSetup = new Expander { Header = "固定一个 Codex 会话", Margin = new Thickness(0, 0, 0, 10) };
+            codexSetup.Expanded += delegate {
                 PopulateCodexSessionMenu();
                 StackPanel sessions = new StackPanel();
-                AddCodexConnectionButtons(sessions, codexSessionItem.DropDownItems, connectionStatus);
-                codexSetup.Content = sessions; codexSetup.Visibility = Visibility.Visible; codexSetup.IsExpanded = true;
-            }));
+                AddCodexConnectionButtons(sessions, codexSessionItem.DropDownItems, connectionStatus, delegate {
+                    codexSetup.IsExpanded = false; refreshConnection();
+                });
+                codexSetup.Content = sessions;
+            };
             connection.Children.Add(codexSetup);
-            connection.Children.Add(ManagerButton("断开连接", delegate {
-                SaveAiConnection(null, null); selectedCodexSession = null; selectedDesktopRolloutPath = null; ClearDesktopSelection();
-                SetThemeAction("idle", false); connectionStatus.Text = "已断开连接";
-            }));
-            for (int i = 0; i < AiStates.Length; i++)
-            {
-                string state = AiStates[i];
-                StackPanel row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
-                row.Children.Add(new TextBlock { Text = AiStateLabels[i], Width = 160, VerticalAlignment = VerticalAlignment.Center });
-                ComboBox choice = new ComboBox { Width = 210, Tag = state };
-                if (activeTheme != null) foreach (ThemeAction action in activeTheme.Actions)
-                {
-                    ComboBoxItem item = new ComboBoxItem { Content = SimpleActionLabel(action.Slot), Tag = action.Slot };
-                    choice.Items.Add(item); if (action.Slot == aiBindings[state]) choice.SelectedItem = item;
-                }
-                if (choice.SelectedItem == null)
-                {
-                    ComboBoxItem unavailable = new ComboBoxItem { Content = SimpleActionLabel(aiBindings[state]) + "（尚未添加）", Tag = aiBindings[state] };
-                    choice.Items.Add(unavailable); choice.SelectedItem = unavailable;
-                }
-                choice.SelectionChanged += delegate {
-                    ComboBoxItem selected = choice.SelectedItem as ComboBoxItem;
-                    if (selected != null) { aiBindings[state] = (string)selected.Tag; SaveAiConnection(connectedAiTool, connectedAiSession, true); }
-                };
-                row.Children.Add(choice); connection.Children.Add(row);
-            }
-            connection.Children.Add(agentSetup);
-            connection.Children.Add(new Expander { Header = "连接说明", Margin = new Thickness(0, 0, 0, 12), Content = ManagerText("自动模式跟随最近开始的任务，普通工具活动不会反复切换；当前任务结束后继续其他任务，需要回答的会话优先。手动选择会固定会话。五分钟没有新信号会标为待确认，长时间思考可能暂时无法确认；普通文字追问仍需 Agent 上报。连接不会自动发送制作请求。", false) });
-            connection.Children.Add(ManagerText("连接其他工具需要对应适配器发送状态。任务结束不代表成功；工具未提供的状态不自动猜测。", false));
+            Expander mapping = new Expander { Header = "更改任务状态对应的动作", Margin = new Thickness(0, 0, 0, 10) };
+            System.Windows.Automation.AutomationProperties.SetAutomationId(mapping, "StateActionBindings");
+            mapping.Expanded += delegate { mapping.Content = BuildActionMappings(); };
+            connection.Children.Add(mapping); connection.Children.Add(agentSetup); connection.Children.Add(details);
             AddManagerTab("连接 AI 工具", connection);
-
             StackPanel settings = ManagerPage("设置", "日常只需调整陪伴偏好。备份和恢复放在下方，需要时再打开。");
             settings.Children.Add(ManagerButton("陪伴偏好", ShowPreferences));
             Expander advanced = new Expander { Header = "高级：备份、恢复与显示器", Margin = new Thickness(0, 10, 0, 0) };
@@ -645,6 +754,62 @@ namespace AIPet.Desktop
             tagline.SetResourceReference(TextBlock.ForegroundProperty, "PetMuted"); brand.Children.Add(tagline);
             DockPanel.SetDock(brand, Dock.Top); managerShell.Children.Add(brand); managerShell.Children.Add(petManagerTabs);
             petManager.Content = managerShell; petManagerTabs.SelectedIndex = tab; petManager.Show();
+        }
+
+        private static StackPanel BuildActionMappings()
+        {
+            StackPanel mappings = new StackPanel();
+            for (int i = 0; i < AiStates.Length; i++)
+            {
+                string state = AiStates[i];
+                StackPanel row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
+                row.Children.Add(new TextBlock { Text = AiStateLabels[i], Width = 160, VerticalAlignment = VerticalAlignment.Center });
+                ComboBox choice = new ComboBox { Width = 210, Tag = state };
+                if (activeTheme != null) foreach (ThemeAction action in activeTheme.Actions)
+                {
+                    ComboBoxItem item = new ComboBoxItem { Content = SimpleActionLabel(action.Slot), Tag = action.Slot };
+                    choice.Items.Add(item); if (action.Slot == aiBindings[state]) choice.SelectedItem = item;
+                }
+                if (choice.SelectedItem == null)
+                {
+                    ComboBoxItem unavailable = new ComboBoxItem { Content = SimpleActionLabel(aiBindings[state]) + "（尚未添加）", Tag = aiBindings[state] };
+                    choice.Items.Add(unavailable); choice.SelectedItem = unavailable;
+                }
+                choice.SelectionChanged += delegate {
+                    ComboBoxItem selected = choice.SelectedItem as ComboBoxItem;
+                    if (selected != null) { aiBindings[state] = (string)selected.Tag; SaveAiConnection(connectedAiTool, connectedAiSession, true); }
+                };
+                row.Children.Add(choice); mappings.Children.Add(row);
+            }
+            return mappings;
+        }
+
+        private static string CurrentConnectionHeading()
+        {
+            if (connectedAiTool == null) return codexFollowMode == "auto" ? "等待 Codex 任务" : "还没有连接";
+            if (connectedAiTool != "codex") return connectedAiTool;
+            if (codexFollowMode == "auto")
+                foreach (CodexWatch watch in codexWatches.Values)
+                    if (watch.Hash == connectedAiSession) return AutomaticCodexLabel(watch, CurrentUnixMilliseconds());
+            return CodexTitleForHash(connectedAiSession) ?? "未命名会话";
+        }
+
+        private static string ConnectionOverview()
+        {
+            if (connectedAiTool == null) return codexFollowMode == "auto" ? "开始一个本机 Codex 任务后，会在这里显示会话标题。" : "可以开启自动跟随，或选择要连接的会话。";
+            string mode = connectedAiTool == "codex" ? (codexFollowMode == "auto" ? "自动跟随 Codex" : "固定的 Codex 会话") : "已连接";
+            int state = Array.IndexOf(AiStates, lastAiState);
+            string status = state < 0 ? "等待任务" : AiStateLabels[state];
+            if (lastAiOutcome == "signal-stale") status = "状态待确认";
+            else if (lastAiOutcome == "action-unavailable") status += " · 请选择可用的动作";
+            else if (lastAiOutcome == "quiet-hours") status += " · 安静时段";
+            else if (lastAiOutcome == "hidden") status += " · 桌宠已隐藏";
+            int others = 0;
+            if (connectedAiTool == "codex" && codexFollowMode == "auto") {
+                long now = CurrentUnixMilliseconds();
+                foreach (CodexWatch watch in codexWatches.Values) if (watch.Hash != connectedAiSession && ActiveCodexWatch(watch, now)) others++;
+            }
+            return mode + " · " + status + (others > 0 ? " · 另有 " + others + " 个活动会话" : "");
         }
 
         private static string FriendlyConnectionStatus()
@@ -674,18 +839,18 @@ namespace AIPet.Desktop
                 Content = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto } });
         }
 
-        private static void AddCodexConnectionButtons(StackPanel panel, Forms.ToolStripItemCollection items, TextBlock status)
+        private static void AddCodexConnectionButtons(StackPanel panel, Forms.ToolStripItemCollection items, TextBlock status, Action selectedSession = null)
         {
             foreach (Forms.ToolStripItem item in items)
             {
                 Forms.ToolStripMenuItem menu = item as Forms.ToolStripMenuItem;
-                if (menu == null) continue;
-                if (menu.DropDownItems.Count > 0) { AddCodexConnectionButtons(panel, menu.DropDownItems, status); continue; }
+                if (menu == null || (menu.Tag as string) == "disconnect") continue;
+                if (menu.DropDownItems.Count > 0) { AddCodexConnectionButtons(panel, menu.DropDownItems, status, selectedSession); continue; }
                 Button button = ManagerButton(menu.Text, delegate {
-                    SaveAiConnection(null, null); menu.PerformClick();
+                    menu.PerformClick();
                     string session = selectedCodexSession;
                     if (session != null) SaveAiConnection("codex", session);
-                    status.Text = FriendlyConnectionStatus();
+                    if (selectedSession != null) selectedSession(); else status.Text = FriendlyConnectionStatus();
                 });
                 CodexSessionDisplay display = menu.Tag as CodexSessionDisplay;
                 if (display != null) {
@@ -762,6 +927,10 @@ namespace AIPet.Desktop
                 + "桌宠程序：" + System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName + "\r\n"
                 + "数据目录：" + experienceRoot + "\r\n"
                 + "读取请求中的全部参考图并校验 SHA-256，按其中的 Prompt 使用你已有的图像/动画生成工具制作透明动作。"
+                + "保持原 Prompt 的动作意图；动画需在约 190 像素的桌宠尺寸下仍能看清动作。"
+                + "非待机动作应在约 0.2 秒内起势，主要动作优先在 0.8–1.6 秒内完成，减少长时间静止与缓慢铺垫。"
+                + "让头部、前爪或尾巴的实际动作幅度清楚可辨，不要只做呼吸或整张图片平移缩放；不同任务状态需要可区分的姿态或节奏。"
+                + "保持脸部、花纹、身体比例、透明边缘和循环接缝稳定，先按桌面实际尺寸预览；用户明确指定的时长或慢动作要求优先。"
                 + "若工具不可用，请明确告诉我缺少什么。将候选主题通过 ai-pet result 提交到上述编号，使用相同桌宠程序和数据目录。"
                 + "完成后我会在桌宠中预览并选择使用。";
         }
@@ -828,6 +997,169 @@ namespace AIPet.Desktop
                 else if (File.Exists(pendingRoleFilePath)) File.Delete(pendingRoleFilePath);
                 pendingRole = previous; UpdatePendingRoleMenu();
             }
+        }
+
+        private static void TestPetBubble(string themePath, string output)
+        {
+            string data = Environment.GetEnvironmentVariable("AI_PET_DATA_DIR"), home = Environment.GetEnvironmentVariable("CODEX_HOME");
+            if (String.IsNullOrEmpty(data) || String.IsNullOrEmpty(home) || Directory.Exists(output) ||
+                !Path.GetFullPath(data).StartsWith(Path.GetFullPath(output).TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase) ||
+                !Path.GetFullPath(home).StartsWith(Path.GetFullPath(data).TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Bubble QA requires a new isolated data/Codex directory.");
+            Directory.CreateDirectory(output); Directory.CreateDirectory(home);
+            string one = "11111111-1111-4111-8111-111111111111", two = "22222222-2222-4222-8222-222222222222";
+            string title = "猫咪动作与会话气泡 🐱", secondTitle = "另一个正在运行的任务 · 标题保持静止";
+            string index = Path.Combine(home, "session_index.jsonl");
+            JavaScriptSerializer json = new JavaScriptSerializer();
+            File.WriteAllLines(index, new[] { json.Serialize(new {id=one, thread_name=title}), json.Serialize(new {id=two, thread_name=secondTitle}) }, Encoding.UTF8);
+            string digest = FileSha256Hex(themePath);
+            activeTheme = ParseThemePackage(themePath);
+            WpfApplication app = new WpfApplication(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            BuildTray(); BuildWindow(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "reference-cat.jpg"));
+            window.Show(); window.Left = window.Top = -10000;
+            SaveAiConnection("codex", DesktopSessionHash(one));
+            Dictionary<string, bool> checks = new Dictionary<string, bool>();
+            Action<string> send = delegate(string state) {
+                if (!ApplyAiEvent(new Dictionary<string, object> { {"version",1}, {"eventId",Guid.NewGuid().ToString("N")},
+                    {"observedAtMs",CurrentUnixMilliseconds()}, {"tool","codex"}, {"session",connectedAiSession}, {"state",state} }))
+                    throw new InvalidOperationException("Bubble fixture event rejected.");
+            };
+            Action<string> capture = delegate(string name) {
+                window.UpdateLayout(); RenderTargetBitmap bitmap = new RenderTargetBitmap(190, 254, 96, 96, PixelFormats.Pbgra32);
+                bitmap.Render((FrameworkElement)window.Content); PngBitmapEncoder encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                using (FileStream file = File.Create(Path.Combine(output, name + ".png"))) encoder.Save(file);
+            };
+            UpdatePetActivityCue();
+            checks["connectedTitleVisible"] = petActivityTitle.Text == title && petActivityLabel == "等待任务";
+            send("running"); capture("running-0");
+            bool animationAllowed = SystemParameters.ClientAreaAnimation && !SystemParameters.HighContrast;
+            System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew(); int stage = 0;
+            System.Windows.Threading.DispatcherTimer observe = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+            observe.Tick += delegate {
+                try {
+                    if (stage == 0 && clock.ElapsedMilliseconds >= 600) {
+                        checks["runningTextAnimated"] = petActivityAnimating == animationAllowed && (!animationAllowed || petActivityText.Text.Contains("."));
+                        checks["titleStaysStill"] = petActivityTitle.Text == title && !petActivityTitle.HasAnimatedProperties;
+                        capture("running-1"); send("needs-user");
+                        checks["waitingIsStatic"] = !petActivityTimer.IsEnabled && petActivityLabel == "等你回答" && petActivityText.Effect == null;
+                        capture("waiting"); send("paused"); capture("paused"); send("finished"); capture("finished");
+                        checks["terminalStatesStatic"] = !petActivityAnimating && petActivityLabel == "任务结束";
+                        SaveAiConnection("codex", DesktopSessionHash(two)); send("running");
+                        checks["switchUpdatesTitle"] = petActivityTitle.Text == secondTitle;
+                        capture("switched");
+                        string longTitle = String.Concat(System.Linq.Enumerable.Repeat("非常长的会话标题🐱", 12));
+                        File.AppendAllText(index, json.Serialize(new {id=two, thread_name=longTitle}) + "\n", Encoding.UTF8);
+                        codexTitlesCheckedAt = DateTime.MinValue; UpdatePetActivityCue(); window.UpdateLayout();
+                        checks["renamedTitleUpdates"] = petActivityTitle.Text.StartsWith("非常长的会话标题");
+                        checks["longTitleFits"] = petActivityTitle.ActualHeight <= 28.1 && petActivityCue.ActualWidth <= 182.1 && petActivityCue.ActualHeight <= 70;
+                        capture("long-title");
+                        window.Hide(); checks["hiddenStopsAnimation"] = !petActivityTimer.IsEnabled;
+                        window.Show(); UpdatePetActivityCue();
+                        checks["shownResumesAnimation"] = petActivityAnimating == animationAllowed;
+                        SaveAiConnection("codex", DesktopSessionHash("33333333-3333-4333-8333-333333333333")); UpdatePetActivityCue();
+                        checks["missingTitleHasFallback"] = petActivityTitle.Text == "未命名会话";
+                        SaveAiConnection(null, null); UpdatePetActivityCue();
+                        checks["disconnectClearsBubble"] = petActivityCue.Visibility == Visibility.Collapsed && petActivityTail.Visibility == Visibility.Collapsed && !petActivityTimer.IsEnabled;
+                        checks["sourceUnchanged"] = FileSha256Hex(themePath) == digest;
+                        bool passed = true; foreach (bool check in checks.Values) passed &= check;
+                        File.WriteAllText(Path.Combine(output, "result.json"), json.Serialize(new {passed=passed, checks=checks, animationAllowed=animationAllowed, installed=false}));
+                        observe.Stop(); if (!passed) Environment.ExitCode = 2; ExitApplication(); stage++;
+                    }
+                } catch (Exception error) { observe.Stop(); File.WriteAllText(Path.Combine(output, "error.txt"), error.ToString()); Environment.ExitCode=2; ExitApplication(); }
+            };
+            observe.Start(); app.Run();
+        }
+
+        private static void TestMotionReadability(string themePath, string output)
+        {
+            string data = Environment.GetEnvironmentVariable("AI_PET_DATA_DIR");
+            if (String.IsNullOrEmpty(data) || Directory.Exists(output) ||
+                !Path.GetFullPath(data).StartsWith(Path.GetFullPath(output).TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Motion QA requires a new isolated output/data directory.");
+            Directory.CreateDirectory(output);
+            string originalHash = FileSha256Hex(themePath);
+            activeTheme = ParseThemePackage(themePath);
+            bool referenceTiming = activeTheme.CompactMotion;
+            Dictionary<string, object> checks = new Dictionary<string, object>();
+            List<object> timing = new List<object>();
+            foreach (ThemeAction action in activeTheme.Actions) {
+                int first, count; double fps;
+                ThemePlaybackTiming(action, out first, out count, out fps);
+                if (first < 0 || count < 1 || first + count > action.Frames.Count) throw new InvalidDataException("Playback range invalid.");
+                timing.Add(new { slot = action.Slot, sourceSeconds = action.Frames.Count / (double)action.FramesPerSecond,
+                    playbackSeconds = count / fps, first = first, frames = count, fps = fps });
+            }
+            activeTheme.CompactMotion = false;
+            bool otherThemesUnchanged = true;
+            foreach (ThemeAction action in activeTheme.Actions) {
+                int first, count; double fps; ThemePlaybackTiming(action, out first, out count, out fps);
+                otherThemesUnchanged &= first == 0 && count == action.Frames.Count && fps == action.FramesPerSecond;
+            }
+            activeTheme.CompactMotion = referenceTiming;
+            checks["otherThemesKeepAuthoredTiming"] = otherThemesUnchanged;
+            WpfApplication app = new WpfApplication(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            BuildTray(); BuildWindow(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "reference-cat.jpg"));
+            window.Show(); window.Left = window.Top = -10000;
+            SaveAiConnection("motion-qa", "fixture");
+            Action<string> send = delegate(string state) {
+                if (!ApplyAiEvent(new Dictionary<string, object> { {"version",1}, {"eventId",Guid.NewGuid().ToString("N")},
+                    {"observedAtMs",CurrentUnixMilliseconds()}, {"tool","motion-qa"}, {"session","fixture"}, {"state",state} }))
+                    throw new InvalidOperationException("QA event rejected.");
+            };
+            Action<string> capture = delegate(string name) {
+                window.UpdateLayout(); FrameworkElement content = (FrameworkElement)window.Content;
+                RenderTargetBitmap image = new RenderTargetBitmap(190, 254, 96, 96, PixelFormats.Pbgra32);
+                image.Render(content); PngBitmapEncoder encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image));
+                using (FileStream stream = File.Create(Path.Combine(output, name + ".png"))) encoder.Save(stream);
+            };
+            send("started");
+            checks["startKeepsWorking"] = HasPersistentAiAnimation() && petActivityText.Text == "任务开始";
+            send("running");
+            System.Diagnostics.Stopwatch preservedClock = themeActionClock;
+            System.Diagnostics.Stopwatch qaClock = System.Diagnostics.Stopwatch.StartNew();
+            int stage = 0;
+            System.Windows.Threading.DispatcherTimer timer = new System.Windows.Threading.DispatcherTimer();
+            timer.Interval = TimeSpan.FromMilliseconds(80);
+            timer.Tick += delegate {
+                try {
+                    if (stage == 0 && qaClock.ElapsedMilliseconds >= 450) {
+                        send("running");
+                        checks["heartbeatsPreserveClock"] = themeActionClock == preservedClock && themeActionClock.ElapsedMilliseconds >= 400;
+                        themeImage.RaiseEvent(new System.Windows.Input.MouseEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0) { RoutedEvent = UIElement.MouseEnterEvent });
+                        themeImage.RaiseEvent(new System.Windows.Input.MouseEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0) { RoutedEvent = UIElement.MouseLeaveEvent });
+                        checks["hoverDoesNotInterruptWork"] = activeThemeAction.Slot == aiBindings["running"] && themeActionClock == preservedClock;
+                        checks["workLabel"] = petActivityLabel == "运行中";
+                        capture("working"); send("needs-user"); qaClock.Restart(); stage++;
+                    }
+                    else if (stage == 1 && qaClock.ElapsedMilliseconds >= 2100) {
+                        checks["inputWaitPersists"] = activeThemeAction.Slot == aiBindings["needs-user"] && petActivityText.Text == "等你回答";
+                        capture("waiting"); send("paused"); qaClock.Restart(); stage++;
+                    }
+                    else if (stage == 2 && qaClock.ElapsedMilliseconds >= 1500) {
+                        checks["pauseLabelPersists"] = petActivityText.Text == "已暂停";
+                        checks["pausePoseHeld"] = activeThemeAction.Slot == aiBindings["paused"] && !themeTimer.IsEnabled;
+                        capture("paused"); send("finished"); qaClock.Restart(); stage++;
+                    }
+                    else if (stage == 3 && qaClock.ElapsedMilliseconds >= 2100) {
+                        checks["finishIsNotSuccess"] = petActivityText.Text == "任务结束";
+                        checks["finishPoseHeld"] = activeThemeAction.Slot == aiBindings["finished"] && !themeTimer.IsEnabled;
+                        capture("finished"); lastAiOutcome = "signal-stale"; ResetConnectedPlayback(); UpdatePetActivityCue();
+                        checks["staleIsNotWork"] = petActivityText.Text == "状态待确认" && activeThemeAction.Slot == "idle";
+                        capture("unconfirmed"); SaveAiConnection(null, null); UpdatePetActivityCue();
+                        checks["disconnectClearsCue"] = petActivityCue.Visibility == Visibility.Collapsed;
+                        checks["sourceUnchanged"] = FileSha256Hex(themePath) == originalHash;
+                        checks["playbackRangesValid"] = true;
+                        timer.Stop(); bool passed = true; foreach (object value in checks.Values) if (!(bool)value) passed = false;
+                        File.WriteAllText(Path.Combine(output, "result.json"), new JavaScriptSerializer().Serialize(new {
+                            passed = passed, checks = checks, timing = timing, compactProfile = referenceTiming, installed = false }));
+                        if (!passed) Environment.ExitCode = 2;
+                        ExitApplication();
+                    }
+                } catch (Exception error) {
+                    timer.Stop(); File.WriteAllText(Path.Combine(output, "error.txt"), error.ToString()); Environment.ExitCode = 2; ExitApplication();
+                }
+            };
+            timer.Start(); app.Run();
         }
 
         private static void TestSimpleExperience(string output)

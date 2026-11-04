@@ -145,8 +145,10 @@ namespace AIPet.Desktop
             System.Windows.Threading.Dispatcher.PushFrame(frame);
             Action<DependencyObject> find = null;
             find = delegate(DependencyObject item) {
+                Expander mappings = item as Expander;
+                if (mappings != null && System.Windows.Automation.AutomationProperties.GetAutomationId(mappings) == "StateActionBindings") mappings.IsExpanded = true;
                 ComboBox combo = item as ComboBox;
-                if (combo != null && !popup) {
+                if (combo != null && Array.IndexOf(AiStates, combo.Tag as string) >= 0 && !popup) {
                     int originalIndex = combo.SelectedIndex;
                     combo.ApplyTemplate(); combo.IsDropDownOpen = true; combo.UpdateLayout();
                     System.Windows.Threading.DispatcherFrame popupFrame = new System.Windows.Threading.DispatcherFrame();
@@ -223,6 +225,18 @@ namespace AIPet.Desktop
  <Style x:Key='PetPrimary' TargetType='Button' BasedOn='{StaticResource {x:Type Button}}'>
   <Setter Property='Background' Value='{DynamicResource PetAccent}'/><Setter Property='Foreground' Value='{DynamicResource PetAccentText}'/>
  </Style>
+ <Style x:Key='PetSegment' TargetType='RadioButton'>
+  <Setter Property='MinWidth' Value='104'/><Setter Property='MinHeight' Value='34'/>
+  <Setter Property='Foreground' Value='{DynamicResource PetMuted}'/>
+  <Setter Property='Template'><Setter.Value><ControlTemplate TargetType='RadioButton'>
+   <Border x:Name='Segment' CornerRadius='6' Padding='12,5' BorderThickness='1' BorderBrush='Transparent' Background='Transparent'>
+    <ContentPresenter HorizontalAlignment='Center' VerticalAlignment='Center' RecognizesAccessKey='True'/>
+   </Border><ControlTemplate.Triggers>
+    <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='Segment' Property='Background' Value='{DynamicResource PetHover}'/></Trigger>
+    <Trigger Property='IsChecked' Value='True'><Setter TargetName='Segment' Property='Background' Value='{DynamicResource PetSelected}'/><Setter TargetName='Segment' Property='BorderBrush' Value='{DynamicResource PetBorder}'/><Setter Property='Foreground' Value='{DynamicResource PetText}'/><Setter Property='FontWeight' Value='SemiBold'/></Trigger>
+    <Trigger Property='IsKeyboardFocused' Value='True'><Setter TargetName='Segment' Property='BorderBrush' Value='{DynamicResource PetAccent}'/></Trigger>
+   </ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter>
+ </Style>
  <Style TargetType='TextBox'>
   <Setter Property='Background' Value='{DynamicResource PetControl}'/><Setter Property='Foreground' Value='{DynamicResource PetText}'/><Setter Property='CaretBrush' Value='{DynamicResource PetText}'/>
   <Setter Property='BorderBrush' Value='{DynamicResource PetBorder}'/><Setter Property='BorderThickness' Value='1'/><Setter Property='Padding' Value='10,7'/>
@@ -271,7 +285,14 @@ namespace AIPet.Desktop
   <Setter Property='Foreground' Value='{DynamicResource PetText}'/><Setter Property='Template'><Setter.Value><ControlTemplate TargetType='Expander'>
    <Border CornerRadius='8' Background='{DynamicResource PetSurface}' BorderBrush='{DynamicResource PetBorder}' BorderThickness='1'>
     <StackPanel><ToggleButton Foreground='{DynamicResource PetText}' IsChecked='{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}' HorizontalContentAlignment='Left'>
-     <ToggleButton.Template><ControlTemplate TargetType='ToggleButton'><Border Background='Transparent' Padding='14,12'><DockPanel><TextBlock Text='⌄' DockPanel.Dock='Right' Margin='12,0,0,0'/><ContentPresenter/></DockPanel></Border></ControlTemplate></ToggleButton.Template>
+     <ToggleButton.Template><ControlTemplate TargetType='ToggleButton'>
+      <Border x:Name='Head' BorderThickness='1' BorderBrush='Transparent' CornerRadius='7' Background='Transparent' Padding='13,10'>
+       <DockPanel><Path x:Name='Chevron' DockPanel.Dock='Right' Data='M 1,2 L 5,6 L 9,2' Stroke='{DynamicResource PetMuted}' StrokeThickness='1.5' Width='10' Height='8' Margin='12,0,0,0' VerticalAlignment='Center'/><ContentPresenter/></DockPanel>
+      </Border><ControlTemplate.Triggers>
+       <Trigger Property='IsChecked' Value='True'><Setter TargetName='Chevron' Property='Data' Value='M 1,6 L 5,2 L 9,6'/></Trigger>
+       <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='Head' Property='Background' Value='{DynamicResource PetHover}'/></Trigger>
+       <Trigger Property='IsKeyboardFocused' Value='True'><Setter TargetName='Head' Property='BorderBrush' Value='{DynamicResource PetAccent}'/></Trigger>
+      </ControlTemplate.Triggers></ControlTemplate></ToggleButton.Template>
      <ContentPresenter ContentSource='Header'/></ToggleButton>
      <ContentPresenter x:Name='Body' ContentSource='Content' Margin='14,4,14,12' Visibility='Collapsed'/>
     </StackPanel></Border><ControlTemplate.Triggers><Trigger Property='IsExpanded' Value='True'><Setter TargetName='Body' Property='Visibility' Value='Visible'/></Trigger></ControlTemplate.Triggers>

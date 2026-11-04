@@ -34,7 +34,7 @@ def main() -> None:
     shutil.copy2(ROOT / 'tools/ai-pet.ps1', stage / 'tools/ai-pet.ps1')
     shutil.copy2(ROOT / 'tools/codex-connection.ps1', stage / 'tools/codex-connection.ps1')
     shutil.copy2(ROOT / 'tools/codex_desktop_probe.ps1', stage / 'tools/codex_desktop_probe.ps1')
-    for name in ['generate_pet_comfy.py', 'configure_local_generator.ps1', 'run_birefnet.py', 'theme_package.py', 'import_sprite_atlas.py', 'birefnet-requirements.txt']:
+    for name in ['extract_pet_video.py', 'generate_pet_comfy.py', 'configure_local_generator.ps1', 'run_birefnet.py', 'theme_package.py', 'import_sprite_atlas.py', 'birefnet-requirements.txt']:
         shutil.copy2(ROOT / 'tools' / name, stage / 'tools' / name)
     shutil.copytree(ROOT / 'skills/ai-pet', stage / 'skills/ai-pet')
     files = [{'path': str(p.relative_to(stage)).replace('\\', '/'), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}

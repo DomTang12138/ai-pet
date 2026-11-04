@@ -15,6 +15,7 @@ def public_files() -> list[Path]:
     names = {'.gitignore', '.gitattributes', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'README.md', 'IMPLEMENTATION-PLAN.md',
              'index.html', 'app.js', 'styles.css', 'simple-ui.js', 'simple-ui.css', 'theme-frame-player.js',
              'runtime/DesktopPet.cs', 'runtime/PetExperience.cs', 'runtime/PetCodex.cs', 'runtime/build.ps1', 'runtime/install-public.ps1',
+             'runtime/PetVideoExperience.cs', 'runtime/PetVideoRequests.cs', 'runtime/PetVideoImport.cs', 'tools/extract_pet_video.py', 'tools/extract_pet_video_smoke.py',
              'runtime/PetGeneration.cs', 'runtime/PetDisplay.cs', 'runtime/PetAppearance.cs', 'runtime/PetCodexTitles.cs', 'runtime/PetCodexFollow.cs', 'runtime/app.manifest', 'runtime/AIPetDesktop.exe.config',
              'tools/generate_pet_comfy.py', 'tools/configure_local_generator.ps1', 'tools/generation_smoke.py', 'tools/birefnet-requirements.txt',
              'tools/import_sprite_atlas.py', 'tools/import_sprite_atlas_smoke.py', 'tools/research_vace_benchmark.py',

@@ -19,7 +19,7 @@ namespace AIPet.Desktop
         private static System.Windows.Controls.Button FindGenerateButton(DependencyObject parent)
         {
             System.Windows.Controls.Button button = parent as System.Windows.Controls.Button;
-            if (button != null && (Convert.ToString(button.Content) == "生成动作" || Convert.ToString(button.Content) == "重新生成" || Convert.ToString(button.Content) == "交给我的 Agent 制作" || Convert.ToString(button.Content) == "制作新的动作")) return button;
+            if (button != null && System.Windows.Automation.AutomationProperties.GetAutomationId(button) == "PhotoSubmit") return button;
             for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++) {
                 System.Windows.Controls.Button found = FindGenerateButton(VisualTreeHelper.GetChild(parent, i));
                 if (found != null) return found;

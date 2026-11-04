@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet('start','status','connect','disconnect','event','bind','build','requests','result','codex-connect','codex-auto','codex-event','codex-install','codex-remove','codex-status','configure-generation','generate','cancel-generation','generation-status','create')][string]$Action = 'status',
+    [ValidateSet('start','status','connect','disconnect','event','bind','build','requests','result','codex-connect','codex-auto','codex-event','codex-install','codex-remove','codex-status','configure-generation','generate','cancel-generation','generation-status','create','video-create','video-requests','video-result')][string]$Action = 'status',
     [string]$Tool, [string]$Session, [string]$State, [string]$Slot,
     [string]$Executable, [string]$DataDirectory, [string]$RequestId, [string]$Theme, [string]$CodexHome, [string]$GeneratorConfig, [string]$CreationSpec
 )
@@ -59,24 +59,25 @@ try {
         $command = if ($Action -eq 'generate') { '--ai-start-generation' } else { '--ai-cancel-generation' }
         $arguments = @($command, $RequestId)
     }
-    elseif ($Action -eq 'result') {
+    elseif ($Action -in @('result','video-result')) {
         if ($RequestId -notmatch '\A[a-f0-9]{32}\z' -or -not (Test-Path -LiteralPath $Theme -PathType Leaf)) { throw '请提供创作编号和生成的主题包。' }
-        $arguments = @('--ai-result', $RequestId, ('"' + [IO.Path]::GetFullPath($Theme) + '"'))
+        $arguments = @(('--ai-' + $Action), $RequestId, ('"' + [IO.Path]::GetFullPath($Theme) + '"'))
     }
     $statusFile = $null
-    if ($Action -in @('status','requests','generation-status','create')) {
+    if ($Action -in @('status','requests','generation-status','create','video-create','video-requests')) {
         $statusFile = Join-Path ([IO.Path]::GetTempPath()) ('ai-pet-status-' + [Guid]::NewGuid().ToString('N') + '.json')
-        $command = if ($Action -eq 'requests') { '--ai-requests' } else { '--ai-status' }
+        $command = if ($Action -in @('requests','video-requests')) { '--ai-' + $Action } else { '--ai-status' }
         $arguments = @($command, ('"' + $statusFile + '"'))
         if ($Action -eq 'generation-status') {
             if ($RequestId -notmatch '\A[a-f0-9]{32}\z') { throw '请提供创作编号。' }
             $arguments = @('--ai-generation-status', $RequestId, ('"' + $statusFile + '"'))
         }
-        if ($Action -eq 'create') {
-            if (-not (Test-Path -LiteralPath $CreationSpec -PathType Leaf)) { throw '请提供包含 photos 和 prompt 的 JSON 文件。' }
-            $arguments = @('--ai-create-request', ('"' + [IO.Path]::GetFullPath($CreationSpec) + '"'), ('"' + $statusFile + '"'))
+        if ($Action -in @('create','video-create')) {
+            if (-not (Test-Path -LiteralPath $CreationSpec -PathType Leaf)) { throw '请提供制作请求 JSON 文件。' }
+            $command = if ($Action -eq 'video-create') { '--ai-video-create' } else { '--ai-create-request' }
+            $arguments = @($command, ('"' + [IO.Path]::GetFullPath($CreationSpec) + '"'), ('"' + $statusFile + '"'))
         }
-    } elseif ($Action -notin @('result','configure-generation')) {
+    } elseif ($Action -notin @('result','video-result','configure-generation')) {
         foreach ($value in $arguments | Select-Object -Skip 1) {
             if ($value -notmatch '\A[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}\z') { throw '请提供合法的工具、会话、状态或动作标识。' }
         }
@@ -88,7 +89,7 @@ try {
     if ($statusFile) {
         Get-Content -LiteralPath $statusFile -Raw -Encoding UTF8
         Remove-Item -LiteralPath $statusFile
-    } elseif ($Action -eq 'result') { Write-Output '候选已提交，请在桌宠中预览并选择使用。' }
+    } elseif ($Action -in @('result','video-result')) { Write-Output '候选已提交，请在桌宠中预览并选择使用。' }
     elseif ($Action -eq 'generate') { Write-Output '已启动生成；用 generation-status 查询进度。' }
     elseif ($Action -eq 'cancel-generation') { Write-Output '已请求取消当前生成。' }
     elseif ($Action -eq 'configure-generation') { Write-Output '生成器已配置。' }

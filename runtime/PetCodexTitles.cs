@@ -135,25 +135,34 @@ namespace AIPet.Desktop
             WriteDesktopLifecycleEvent("DesktopToolActivity", CodexEvidenceJson("desktop-rollout", evidence, 0, evidence.Length, 0, one)); PopulateCodexSessionMenu();
             bool noDuplicate = codexSessionItem.DropDownItems.Count == 4;
             ShowPetManager(1);
+            string configBefore = FileSha256Hex(aiConfigurationPath);
+            System.Windows.Controls.Button pinFirst = null;
             Action<System.Windows.DependencyObject> expand = null;
             expand = delegate(System.Windows.DependencyObject item) {
                 System.Windows.Controls.Expander list = item as System.Windows.Controls.Expander;
-                if (list != null && (string)list.Header == "可连接的本机会话") {
-                    System.Windows.Controls.StackPanel choices = new System.Windows.Controls.StackPanel();
-                    AddCodexConnectionButtons(choices, desktop.DropDownItems, new System.Windows.Controls.TextBlock());
-                    list.Content = choices; list.Visibility = System.Windows.Visibility.Visible; list.IsExpanded = true;
+                if (list != null && list.Header as string == "固定一个 Codex 会话") list.IsExpanded = true;
+                var button = item as System.Windows.Controls.Button;
+                if (button != null && button.Content is System.Windows.Controls.StackPanel) {
+                    var label = (System.Windows.Controls.StackPanel)button.Content;
+                    if (label.Children.Count == 2 && label.Children[1] is System.Windows.Controls.TextBlock &&
+                        ((System.Windows.Controls.TextBlock)label.Children[1]).Text.StartsWith("project-a", StringComparison.Ordinal))
+                        pinFirst = button;
                 }
                 foreach (object child in System.Windows.LogicalTreeHelper.GetChildren(item)) if (child is System.Windows.DependencyObject) expand((System.Windows.DependencyObject)child);
             }; expand(petManagerTabs);
             CaptureAppearanceContent(petManager, Path.Combine(output, "session-titles.png"));
-            File.AppendAllText(index, "\n" + json.Serialize(new { id = two, thread_name = "新的会话标题" }) + "\n", Encoding.UTF8);
+            bool browsePreservesBinding = configBefore == FileSha256Hex(aiConfigurationPath);
+            if (pinFirst != null) pinFirst.RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            bool pinFromList = pinFirst != null && connectedAiSession == DesktopSessionHash(one) && codexFollowMode == "manual";
+            File.AppendAllText(index, "\n" + json.Serialize(new { id = one, thread_name = "新的会话标题" }) + "\n", Encoding.UTF8);
             codexTitlesCheckedAt = DateTime.MinValue;
             bool renamed = FriendlyConnectionStatus().Contains("新的会话标题");
             File.Delete(index); codexTitlesCheckedAt = DateTime.MinValue;
             bool missingIndex = FriendlyConnectionStatus().Contains("未命名会话") && !FriendlyConnectionStatus().Contains(connectedAiSession);
-            bool passed = titles && distinguish && fallback && binding && status && renamed && missingIndex && noDuplicate;
+            bool passed = titles && distinguish && fallback && binding && status && renamed && missingIndex && noDuplicate && browsePreservesBinding && pinFromList;
             File.WriteAllText(Path.Combine(output, "result.json"), json.Serialize(new { passed = passed, titles = titles, duplicateNamesDistinguished = distinguish,
-                unnamedFallback = fallback, exactBinding = binding, connectedTitle = status, renameRefresh = renamed, missingIndex = missingIndex, duplicateDesktopEventsHidden = noDuplicate }));
+                unnamedFallback = fallback, exactBinding = binding, connectedTitle = status, renameRefresh = renamed, missingIndex = missingIndex, duplicateDesktopEventsHidden = noDuplicate,
+                browsePreservesBinding = browsePreservesBinding, pinFromList = pinFromList }));
             ExitApplication();
             if (!passed) throw new InvalidOperationException("Codex title checks failed.");
         }

@@ -174,6 +174,9 @@ namespace AIPet.Desktop
         {
             public string Name;
             public List<ThemeAction> Actions;
+            // Playback-only tuning for the already reviewed reference cat. Other
+            // imported themes keep their authored timing and original pixels.
+            public bool CompactMotion;
 
             public ThemeAction FindAction(string slot)
             {
@@ -587,6 +590,16 @@ namespace AIPet.Desktop
                     File.WriteAllText(Path.GetFullPath(args[3]), "{\"roleMatchesReference\":false,\"transparentPreview\":false,\"error\":\"" + EscapeJson(error.Message) + "\"}");
                     Environment.ExitCode = 2;
                 }
+                return;
+            }
+            if (args.Length == 3 && args[0] == "--test-motion-readability")
+            {
+                TestMotionReadability(args[1], args[2]);
+                return;
+            }
+            if (args.Length == 3 && args[0] == "--test-pet-bubble")
+            {
+                TestPetBubble(args[1], args[2]);
                 return;
             }
             if (args.Length >= 4 && args[0] == "--preview-theme")
@@ -1762,6 +1775,7 @@ namespace AIPet.Desktop
             if (codexSessionItem == null) return;
             codexSessionItem.DropDownItems.Clear();
             Forms.ToolStripMenuItem disconnected = new Forms.ToolStripMenuItem("断开 Codex 关联");
+            disconnected.Tag = "disconnect";
             disconnected.Enabled = selectedCodexSession != null;
             disconnected.Click += delegate
             {
@@ -2738,11 +2752,11 @@ namespace AIPet.Desktop
                 CompleteThemePointer(releasedAt);
                 e.Handled = true;
             };
-            themeImage.MouseEnter += delegate { if (preferences.InteractionEnabled) SetThemeAction("hover", false); };
-            themeImage.MouseLeave += delegate { SetThemeAction("idle", false); };
+            themeImage.MouseEnter += delegate { if (preferences.InteractionEnabled && !HasConnectedThemeState()) SetThemeAction("hover", false); };
+            themeImage.MouseLeave += delegate { if (!HasConnectedThemeState()) SetThemeAction("idle", false); };
             Grid floatingLayer = new Grid();
             floatingLayer.Children.Add(themeImage);
-            TextBlock cueText = new TextBlock { Text = runtimeSpriteOnly ? "工具权限待确认" : "审核演示 · 权限请求", Foreground = MediaBrushes.White,
+            TextBlock cueText = new TextBlock { Text = runtimeSpriteOnly ? "需要你回答或确认" : "审核演示 · 权限请求", Foreground = MediaBrushes.White,
                 FontSize = 10, FontWeight = FontWeights.Medium };
             permissionCue = new Border { Child = cueText,
                 Background = new SolidColorBrush(MediaColor.FromArgb(226, 31, 37, 43)),
@@ -2750,6 +2764,7 @@ namespace AIPet.Desktop
                 HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0, 2, 0, 0), IsHitTestVisible = false, Visibility = Visibility.Collapsed };
             floatingLayer.Children.Add(permissionCue);
+            BuildPetActivityCue(floatingLayer);
             window.Content = floatingLayer;
             SetThemeAction("idle", false);
         }
@@ -2811,6 +2826,156 @@ namespace AIPet.Desktop
             return clicked;
         }
 
+        private static Border petActivityCue;
+        private static TextBlock petActivityText;
+        private static Border petActivityDot;
+        private static TextBlock petActivityTitle;
+        private static TextBlock petActivityTool;
+        private static System.Windows.Shapes.Polygon petActivityTail;
+        private static DispatcherTimer petActivityTimer;
+        private static string petActivityLabel;
+        private static bool petActivityAnimating;
+        private static int petActivityPhase;
+
+        private static bool HasPersistentAiAnimation()
+        {
+            return HasConnectedThemeState() && (lastAiState == "started" || lastAiState == "running" || lastAiState == "needs-user");
+        }
+
+        private static bool HasConnectedThemeState()
+        {
+            return connectedAiTool != null && Array.IndexOf(AiStates, lastAiState) >= 0 &&
+                lastAiOutcome != "signal-stale" && lastAiOutcome != "hidden" && lastAiOutcome != "quiet-hours" &&
+                window != null && window.IsVisible && !IsWithinQuietHours(preferences, DateTime.Now.TimeOfDay);
+        }
+
+        private static void ResumeConnectedThemeOrIdle()
+        {
+            if (HasConnectedThemeState() && aiBindings.ContainsKey(lastAiState)) {
+                SetThemeAction(aiBindings[lastAiState], false);
+                if ((lastAiState == "paused" || lastAiState == "finished") && activeThemeAction != null) {
+                    if (themeTimer != null) themeTimer.Stop();
+                    int first, count; double fps; ThemePlaybackTiming(activeThemeAction, out first, out count, out fps);
+                    themeFrameIndex = first + count - 1; themeImage.Source = activeThemeAction.Frames[themeFrameIndex];
+                    activeThemeOneShot = false;
+                }
+            } else SetThemeAction("idle", false);
+        }
+
+        private static void ThemePlaybackTiming(ThemeAction action, out int first, out int count, out double fps, ThemePackage package = null)
+        {
+            first = 0; count = action.Frames.Count; fps = action.FramesPerSecond;
+            package = package ?? activeTheme;
+            if (package == null || !package.CompactMotion) return;
+            // Keep all source images intact. Trim only the slow anticipation and
+            // near-static tail of this known package; do not guess for user themes.
+            switch (action.Slot) {
+                case "recent-activity": first = 1; count = 42; fps = 30; break;
+                case "hover": first = 1; count = 42; fps = 28; break;
+                case "click": case "needs-user": first = 5; count = 45; fps = 30; break;
+                case "interrupt": first = 3; count = 32; fps = 30; break;
+                case "stop-unknown": first = 6; count = 54; fps = 30; break;
+            }
+        }
+
+        private static void BuildPetActivityCue(Grid layer)
+        {
+            if (petActivityTimer != null) petActivityTimer.Stop();
+            petActivityAnimating = false; petActivityPhase = 0; petActivityLabel = null;
+            petActivityTitle = new TextBlock { FontSize = 11, FontWeight = FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis,
+                LineHeight = 14, LineStackingStrategy = LineStackingStrategy.BlockLineHeight, MaxHeight = 28 };
+            petActivityText = new TextBlock { FontSize = 13, FontWeight = FontWeights.SemiBold, Width = 112,
+                VerticalAlignment = VerticalAlignment.Center };
+            petActivityDot = new Border { Width = 6, Height = 6, CornerRadius = new CornerRadius(3),
+                Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
+            petActivityTool = new TextBlock { FontSize = 9, VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Right };
+            StackPanel row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0), Height = 18 };
+            row.Children.Add(petActivityDot); row.Children.Add(petActivityText);
+            row.Children.Add(petActivityTool);
+            StackPanel body = new StackPanel(); body.Children.Add(petActivityTitle); body.Children.Add(row);
+            petActivityCue = new Border { Child = body, CornerRadius = new CornerRadius(15), Width = 182,
+                BorderThickness = new Thickness(1), Padding = new Thickness(11, 7, 11, 7),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                IsHitTestVisible = false, Visibility = Visibility.Collapsed };
+            petActivityTail = new System.Windows.Shapes.Polygon { Points = new PointCollection {
+                new Point(29, 0), new Point(39, 9), new Point(44, 0) }, Height = 9, Width = 182,
+                HorizontalAlignment = HorizontalAlignment.Center, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
+            StackPanel bubble = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 4, 0, 0), IsHitTestVisible = false };
+            bubble.Children.Add(petActivityCue); bubble.Children.Add(petActivityTail); layer.Children.Add(bubble);
+            petActivityTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+            petActivityTimer.Tick += delegate {
+                if (!petActivityAnimating || window == null || !window.IsVisible || petActivityCue.Visibility != Visibility.Visible) {
+                    petActivityTimer.Stop(); return;
+                }
+                petActivityPhase = (petActivityPhase + 1) % 4;
+                petActivityText.Text = petActivityLabel + new string('.', petActivityPhase);
+            };
+            DispatcherTimer ownedTimer = petActivityTimer;
+            window.Closed += delegate { ownedTimer.Stop(); };
+            window.IsVisibleChanged += delegate { UpdatePetActivityCue(); };
+        }
+
+        private static void UpdatePetActivityCue()
+        {
+            if (petActivityCue == null) return;
+            string label = null;
+            bool dark = PersonalizeValue("AppsUseLightTheme", 1) == 0;
+            bool contrast = SystemParameters.HighContrast;
+            MediaColor color = dark ? MediaColor.FromRgb(179, 188, 201) : MediaColor.FromRgb(88, 101, 121);
+            if (connectedAiTool != null) {
+                if (permissionCue != null) permissionCue.Visibility = Visibility.Collapsed;
+                if (lastAiOutcome == "signal-stale") label = "状态待确认";
+                else if (lastAiOutcome != "hidden" && lastAiOutcome != "quiet-hours") {
+                    if (lastAiState == null) label = "等待任务";
+                    if (lastAiState == "started") { label = "任务开始"; color = dark ? MediaColor.FromRgb(104, 203, 255) : MediaColor.FromRgb(0, 104, 201); }
+                    if (lastAiState == "running") { label = "运行中"; color = dark ? MediaColor.FromRgb(104, 203, 255) : MediaColor.FromRgb(0, 104, 201); }
+                    if (lastAiState == "needs-user") { label = "等你回答"; color = dark ? MediaColor.FromRgb(255, 196, 93) : MediaColor.FromRgb(156, 88, 0); }
+                    if (lastAiState == "paused") label = "已暂停";
+                    if (lastAiState == "finished") label = "任务结束";
+                }
+            }
+            else if (activeThemeAction != null && activeThemeAction.Slot != "idle")
+                label = "动作预览 · " + SimpleActionLabel(activeThemeAction.Slot);
+            string title = connectedAiTool == "codex" ? CodexTitleForHash(connectedAiSession) ?? "未命名会话"
+                : connectedAiTool != null ? "当前 AI 任务" : "动作预览";
+            // Only the status line animates; a long title wraps at most twice and
+            // remains still. Re-polling or receiving a heartbeat cannot reset it.
+            if (petActivityTitle.Text != title) petActivityTitle.Text = title;
+            petActivityCue.ToolTip = title;
+            petActivityTool.Text = connectedAiTool == "codex" ? "Codex" : connectedAiTool == null ? "预览" : "AI";
+            SolidColorBrush background = contrast ? System.Windows.SystemColors.WindowBrush : new SolidColorBrush(
+                dark ? MediaColor.FromArgb(245, 29, 34, 43) : MediaColor.FromArgb(247, 249, 252, 255));
+            petActivityCue.Background = background; petActivityTail.Fill = background;
+            petActivityCue.BorderBrush = contrast ? System.Windows.SystemColors.WindowTextBrush : new SolidColorBrush(
+                dark ? MediaColor.FromArgb(110, 140, 179, 221) : MediaColor.FromArgb(95, 117, 151, 190));
+            petActivityTitle.Foreground = contrast ? System.Windows.SystemColors.WindowTextBrush : dark ? MediaBrushes.White :
+                new SolidColorBrush(MediaColor.FromRgb(34, 48, 68));
+            petActivityTool.Foreground = contrast ? System.Windows.SystemColors.WindowTextBrush : new SolidColorBrush(color);
+            petActivityText.Foreground = petActivityDot.Background = contrast ? System.Windows.SystemColors.WindowTextBrush : new SolidColorBrush(color);
+            bool visible = label != null && (window == null || window.IsVisible);
+            petActivityCue.Visibility = petActivityTail.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            bool animate = visible && lastAiState == "running" && connectedAiTool != null &&
+                lastAiOutcome != "signal-stale" && !contrast && SystemParameters.ClientAreaAnimation;
+            if (label != petActivityLabel || animate != petActivityAnimating) {
+                petActivityLabel = label; petActivityAnimating = animate; petActivityPhase = 0;
+                petActivityText.Text = label ?? "";
+                petActivityText.BeginAnimation(UIElement.OpacityProperty, null);
+                petActivityDot.BeginAnimation(UIElement.OpacityProperty, null);
+                if (animate) {
+                    DoubleAnimation glow = new DoubleAnimation(0.65, 1, TimeSpan.FromMilliseconds(850)) {
+                        AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever,
+                        EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } };
+                    petActivityText.BeginAnimation(UIElement.OpacityProperty, glow);
+                    petActivityDot.BeginAnimation(UIElement.OpacityProperty, glow);
+                    petActivityTimer.Start();
+                } else petActivityTimer.Stop();
+            }
+            petActivityText.Effect = animate ? new DropShadowEffect { Color = color, BlurRadius = 7, ShadowDepth = 0, Opacity = 0.6 } : null;
+        }
+
         private static bool SetThemeAction(string slot, bool oneShot)
         {
             if (activeTheme == null || themeImage == null) return false;
@@ -2840,9 +3005,13 @@ namespace AIPet.Desktop
             if (themeTimer != null) themeTimer.Stop();
             activeThemeAction = action;
             activeThemeOneShot = oneShot && action.Slot != "idle";
-            themeFrameIndex = 0;
-            themeImage.Source = action.Frames[0];
+            int firstFrame, playbackFrames;
+            double playbackFps;
+            ThemePlaybackTiming(action, out firstFrame, out playbackFrames, out playbackFps);
+            themeFrameIndex = firstFrame;
+            themeImage.Source = action.Frames[firstFrame];
             themeActionClock = System.Diagnostics.Stopwatch.StartNew();
+            UpdatePetActivityCue();
             TraceFloatingReview("action-start");
             if (action.Frames.Count < 2)
             {
@@ -2855,7 +3024,7 @@ namespace AIPet.Desktop
                         singleFrameTimer.Stop();
                         if (activeThemeAction != action) return;
                         activeThemeOneShot = false;
-                        SetThemeAction("idle", false);
+                        ResumeConnectedThemeOrIdle();
                     };
                     themeTimer = singleFrameTimer;
                     singleFrameTimer.Start();
@@ -2868,25 +3037,34 @@ namespace AIPet.Desktop
             // A full-frame background timer can itself arrive a frame late;
             // the source still changes only when the intended frame advances.
             DispatcherTimer actionTimer = new DispatcherTimer(DispatcherPriority.Render);
-            actionTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(16, 500.0 / action.FramesPerSecond));
+            actionTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(16, 500.0 / playbackFps));
             actionTimer.Tick += delegate
             {
                 if (activeThemeAction != action || activeTheme == null) { actionTimer.Stop(); return; }
-                long elapsedFrame = (long)(actionClock.Elapsed.TotalSeconds * action.FramesPerSecond);
-                bool connectedRunning = connectedAiTool != null && lastAiState == "running" &&
-                    action.Slot == aiBindings["running"];
-                if (!shouldLoop && !connectedRunning && elapsedFrame >= action.Frames.Count)
+                long elapsedFrame = (long)(actionClock.Elapsed.TotalSeconds * playbackFps);
+                bool connectedRunning = connectedAiTool != null && (lastAiState == "running" || lastAiState == "started") &&
+                    action.Slot == aiBindings[lastAiState];
+                bool waitingForUser = HasPersistentAiAnimation() && lastAiState == "needs-user" &&
+                    action.Slot == aiBindings["needs-user"];
+                if (!shouldLoop && !connectedRunning && !waitingForUser && elapsedFrame >= playbackFrames)
                 {
                     actionTimer.Stop();
                     activeThemeOneShot = false;
+                    if (HasConnectedThemeState() && (lastAiState == "paused" || lastAiState == "finished") &&
+                        action.Slot == aiBindings[lastAiState]) {
+                        themeFrameIndex = firstFrame + playbackFrames - 1;
+                        themeImage.Source = action.Frames[themeFrameIndex];
+                        return;
+                    }
                     if (action.Slot != "idle") {
-                        if (connectedAiTool != null && lastAiState == "running" && window.IsVisible &&
-                            !IsWithinQuietHours(preferences, DateTime.Now.TimeOfDay)) SetThemeAction(aiBindings["running"], false);
-                        else SetThemeAction("idle", false);
+                        ResumeConnectedThemeOrIdle();
                     }
                     return;
                 }
-                int nextFrame = (int)(elapsedFrame % action.Frames.Count);
+                // A waiting gesture repeats with a quiet two-second rest, rather
+                // than disappearing while the host still needs an answer.
+                long cycleFrames = playbackFrames + (waitingForUser ? (long)(playbackFps * 2) : 0);
+                int nextFrame = firstFrame + (int)Math.Min(playbackFrames - 1, elapsedFrame % cycleFrames);
                 if (nextFrame != themeFrameIndex)
                 {
                     themeFrameIndex = nextFrame;
@@ -3331,7 +3509,8 @@ namespace AIPet.Desktop
                     throw new InvalidDataException("主题包包含清单之外的文件。");
                 foreach (string expected in expectedEntries)
                     if (!entries.ContainsKey(expected)) throw new InvalidDataException("主题包缺少清单引用的文件。");
-                return new ThemePackage { Name = themeName, Actions = parsedActions };
+                return new ThemePackage { Name = themeName, Actions = parsedActions,
+                    CompactMotion = FileSha256Hex(packagePath) == ReviewedReferenceThemeSha256 };
             }
         }
 
@@ -3477,7 +3656,9 @@ namespace AIPet.Desktop
                 preview.BeginInit();
                 preview.CacheOption = BitmapCacheOption.OnLoad;
                 preview.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
-                preview.DecodePixelHeight = 254;
+                if ((long)canvasWidth * 254 > (long)canvasHeight * 760)
+                    preview.DecodePixelWidth = Math.Min(canvasWidth, 760);
+                else preview.DecodePixelHeight = 254;
                 preview.StreamSource = stream;
                 preview.EndInit();
                 preview.Freeze();
@@ -3746,23 +3927,29 @@ namespace AIPet.Desktop
                     PersistThemeFile(stagedPath);
                     SaveThemeBinding();
                 }
-                activeTheme = candidate;
-                bundledMotionPreview = false;
-                lastAutomaticActionUtc = DateTime.UtcNow;
-                if (rollbackThemeItem != null) rollbackThemeItem.Enabled = File.Exists(previousThemeFilePath);
-                if (rollbackRoleItem != null) rollbackRoleItem.Enabled = File.Exists(previousRoleFilePath);
-                if (exportThemeItem != null) exportThemeItem.Enabled = true;
-                if (removeThemeItem != null) removeThemeItem.Enabled = true;
-                if (reviewSavedThemeItem != null) reviewSavedThemeItem.Enabled = false;
-                RebuildRuntimeWindow();
-                trayIcon.Text = "AI Pet Studio · 本地主题陪伴";
-                trayIcon.ShowBalloonTip(2200, "已使用新动作", candidate.Name + " 已在桌面启用。", Forms.ToolTipIcon.Info);
+                ShowInstalledTheme(candidate);
             }
             catch (Exception error)
             {
                 if (File.Exists(stagedPath)) File.Delete(stagedPath);
                 MessageBox.Show("主题包未安装。\n\n" + error.Message, "AI Pet Studio", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
+        }
+
+        private static void ShowInstalledTheme(ThemePackage candidate)
+        {
+            activeTheme = candidate;
+            bundledMotionPreview = false;
+            lastAutomaticActionUtc = DateTime.UtcNow;
+            if (rollbackThemeItem != null) rollbackThemeItem.Enabled = File.Exists(previousThemeFilePath);
+            if (rollbackRoleItem != null) rollbackRoleItem.Enabled = File.Exists(previousRoleFilePath);
+            if (exportThemeItem != null) exportThemeItem.Enabled = true;
+            if (removeThemeItem != null) removeThemeItem.Enabled = true;
+            if (reviewSavedThemeItem != null) reviewSavedThemeItem.Enabled = false;
+            RebuildRuntimeWindow();
+            if (HasConnectedThemeState()) ResumeConnectedThemeOrIdle();
+            trayIcon.Text = "AI Pet Studio · 本地主题陪伴";
+            trayIcon.ShowBalloonTip(2200, "已使用新动作", candidate.Name + " 已在桌面启用。", Forms.ToolTipIcon.Info);
         }
 
         private static string FileSha256Hex(string path)
@@ -3863,15 +4050,15 @@ namespace AIPet.Desktop
             throw new InvalidDataException("事件审核槽不受支持。");
         }
 
-        private static bool ReviewThemePackage(ThemePackage candidate, RoleCard targetRole = null)
+        private static bool ReviewThemePackage(ThemePackage candidate, RoleCard targetRole = null, string onlySlot = null)
         {
-            ThemeAction idle = candidate.IdleAction;
+            ThemeAction idle = onlySlot == null ? candidate.IdleAction : candidate.FindAction(onlySlot);
             List<ThemeAction> reviewActions = new List<ThemeAction>();
             reviewActions.Add(idle);
-            for (int i = 0; i < candidate.Actions.Count; i++)
+            for (int i = 0; onlySlot == null && i < candidate.Actions.Count; i++)
                 if (candidate.Actions[i].Slot != "idle") reviewActions.Add(candidate.Actions[i]);
             Window review = new Window();
-            review.Title = "预览宠物和动作";
+            review.Title = onlySlot == null ? "预览宠物和动作" : "预览视频动作";
             review.Width = 650;
             review.Height = 600;
             review.ResizeMode = ResizeMode.NoResize;
@@ -3891,24 +4078,24 @@ namespace AIPet.Desktop
             Grid layout = new Grid();
             layout.Margin = new Thickness(0);
             layout.Background = review.Background;
-            layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(48) });
+            layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(70) });
             layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
             layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(278) });
-            layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(74) });
-            layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(58) });
-            layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(52) });
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
             StackPanel heading = new StackPanel();
-            heading.Margin = new Thickness(16, 8, 16, 0);
+            heading.Margin = new Thickness(16, 14, 16, 0);
             TextBlock title = new TextBlock();
-            title.Text = "看看宠物在桌面上的样子";
-            title.FontSize = 16;
+            title.Text = onlySlot == null ? "预览这套宠物动作" : "预览视频动作";
+            title.FontSize = 20;
             title.FontWeight = FontWeights.SemiBold;
             title.Foreground = new SolidColorBrush(MediaColor.FromRgb(52, 48, 41));
             heading.Children.Add(title);
             TextBlock subtitle = new TextBlock();
-            subtitle.Text = candidate.Name;
-            subtitle.FontSize = 11;
+            subtitle.Text = onlySlot == null ? candidate.Name : "使用后将替换「" + candidate.Name + "」的「" + SimpleActionLabel(onlySlot) + "」动作。";
+            subtitle.FontSize = 12;
             subtitle.Foreground = new SolidColorBrush(MediaColor.FromRgb(132, 125, 111));
             heading.Children.Add(subtitle);
             Grid.SetRow(heading, 0);
@@ -3924,6 +4111,14 @@ namespace AIPet.Desktop
             }
             Grid.SetRow(actionSelector, 1);
             layout.Children.Add(actionSelector);
+            if (reviewActions.Count == 1) {
+                actionSelector.Visibility = Visibility.Collapsed;
+                TextBlock actionName = new TextBlock { Text = SimpleActionLabel(idle.Slot),
+                    Margin = new Thickness(16, 0, 16, 0), VerticalAlignment = VerticalAlignment.Center,
+                    FontWeight = FontWeights.SemiBold, FontSize = 14 };
+                Grid.SetRow(actionName, 1);
+                layout.Children.Add(actionName);
+            }
 
             Grid previews = new Grid();
             previews.Margin = new Thickness(16, 0, 16, 0);
@@ -3939,36 +4134,27 @@ namespace AIPet.Desktop
 
             TextBlock reviewNote = new TextBlock();
             RoleCard comparedRole = targetRole ?? activeRole;
-            string identityNote = comparedRole == null ?
-                "看看形象和动作是否符合你的预期。" : "请对照「" + comparedRole.Name + "」的参考照片检查形象。";
-            reviewNote.Text = identityNote + "请看完每个动作，确认动作和轮廓都符合预期，满意后再使用。";
-            reviewNote.FontSize = 11;
+            string identityNote = comparedRole == null ? "" : "请对照「" + comparedRole.Name + "」的参考照片检查形象。";
+            reviewNote.FontSize = 13;
             reviewNote.TextWrapping = TextWrapping.Wrap;
             reviewNote.VerticalAlignment = VerticalAlignment.Center;
-            reviewNote.Margin = new Thickness(16, 0, 16, 0);
+            reviewNote.Margin = new Thickness(16, 8, 16, 0);
             reviewNote.Foreground = new SolidColorBrush(MediaColor.FromRgb(111, 93, 72));
             Grid.SetRow(reviewNote, 3);
             layout.Children.Add(reviewNote);
 
-            StackPanel reviewControls = new StackPanel();
-            reviewControls.Margin = new Thickness(16, 0, 16, 0);
-            CheckBox reviewed = new CheckBox();
-            reviewed.Content = "这个动作的形象、动作和轮廓都符合预期";
-            reviewed.FontSize = 11;
-            reviewed.VerticalAlignment = VerticalAlignment.Center;
-            reviewControls.Children.Add(reviewed);
             TextBlock reviewProgress = new TextBlock();
-            reviewProgress.FontSize = 11;
-            reviewProgress.Margin = new Thickness(0, 4, 0, 0);
-            reviewProgress.Foreground = new SolidColorBrush(MediaColor.FromRgb(111, 93, 72));
-            reviewControls.Children.Add(reviewProgress);
-            Grid.SetRow(reviewControls, 4);
-            layout.Children.Add(reviewControls);
+            reviewProgress.FontSize = 12;
+            reviewProgress.Margin = new Thickness(16, 8, 16, 0);
+            Grid.SetRow(reviewProgress, 4);
+            layout.Children.Add(reviewProgress);
 
             StackPanel buttons = new StackPanel();
             buttons.Orientation = Orientation.Horizontal;
             buttons.HorizontalAlignment = HorizontalAlignment.Right;
-            buttons.Margin = new Thickness(16, 0, 16, 0);
+            buttons.Margin = new Thickness(16, 12, 16, 16);
+            Button replay = new Button { Content = "重播动作", Margin = new Thickness(0, 0, 8, 0) };
+            buttons.Children.Add(replay);
             Button cancel = new Button();
             cancel.Content = "返回修改";
             cancel.Width = 94;
@@ -3976,13 +4162,12 @@ namespace AIPet.Desktop
             cancel.IsCancel = true;
             buttons.Children.Add(cancel);
             Button install = new Button();
-            install.Content = "使用这只宠物";
-            install.Width = 104;
+            install.Content = onlySlot == null ? "使用这只宠物" : "使用这个动作";
+            install.MinWidth = 120;
             install.IsDefault = true;
             install.IsEnabled = false;
             install.Background = new SolidColorBrush(MediaColor.FromRgb(222, 126, 77));
             install.Foreground = MediaBrushes.White;
-            install.Click += delegate { review.DialogResult = true; };
             buttons.Children.Add(install);
             Grid.SetRow(buttons, 5);
             layout.Children.Add(buttons);
@@ -3993,56 +4178,63 @@ namespace AIPet.Desktop
             HashSet<string> reviewedSlots = new HashSet<string>(StringComparer.Ordinal);
             ThemeAction selectedAction = idle;
             int reviewFrameIndex = 0;
-            bool changingAction = false;
-            DispatcherTimer previewTimer = new DispatcherTimer();
+            int reviewFirst = 0, reviewCount = idle.Frames.Count;
+            double reviewFps = idle.FramesPerSecond;
+            System.Diagnostics.Stopwatch reviewClock = null;
+            bool presented = false;
+            DispatcherTimer previewTimer = new DispatcherTimer(DispatcherPriority.Render);
             Action refreshReviewState = delegate
             {
-                install.IsEnabled = reviewedSlots.Count == reviewActions.Count;
-                reviewProgress.Text = "已确认 " + reviewedSlots.Count + " / " + reviewActions.Count + " 个动作；全部确认后可使用。";
+                bool played = playedSlots.Contains(selectedAction.Slot);
+                bool alreadyConfirmed = reviewedSlots.Contains(selectedAction.Slot);
+                install.IsEnabled = played;
+                if (onlySlot != null) install.Content = "使用这个动作";
+                else if (alreadyConfirmed) install.Content = "查看待确认动作";
+                else install.Content = reviewedSlots.Count + 1 == reviewActions.Count ? "确认并使用整套动作" : "确认并查看下一个";
+                reviewProgress.Text = played ? "已播放一遍" : "正在播放，播完即可确认";
+                if (reviewActions.Count > 1) reviewProgress.Text += "  ·  已确认 " + reviewedSlots.Count + " / " + reviewActions.Count;
+                replay.Visibility = reviewCount > 1 ? Visibility.Visible : Visibility.Collapsed;
             };
             previewTimer.Tick += delegate
             {
-                if (reviewFrameIndex + 1 < selectedAction.Frames.Count) reviewFrameIndex++;
-                else if (selectedAction.Loop) reviewFrameIndex = 0;
-                else { previewTimer.Stop(); return; }
+                long elapsed = (long)(reviewClock.Elapsed.TotalSeconds * reviewFps);
+                reviewFrameIndex = reviewFirst + (int)(selectedAction.Loop ? elapsed % reviewCount : Math.Min(reviewCount - 1, elapsed));
                 for (int i = 0; i < previewImages.Count; i++) previewImages[i].Source = selectedAction.Frames[reviewFrameIndex];
-                if (reviewFrameIndex == selectedAction.Frames.Count - 1)
-                {
-                    playedSlots.Add(selectedAction.Slot);
-                    reviewed.IsEnabled = true;
-                }
+                if (elapsed >= reviewCount && playedSlots.Add(selectedAction.Slot)) refreshReviewState();
+                if (!selectedAction.Loop && elapsed >= reviewCount) previewTimer.Stop();
             };
-            actionSelector.SelectionChanged += delegate
+            Action playSelection = delegate
             {
                 if (actionSelector.SelectedIndex < 0) return;
                 previewTimer.Stop();
                 selectedAction = reviewActions[actionSelector.SelectedIndex];
-                reviewFrameIndex = 0;
+                ThemePlaybackTiming(selectedAction, out reviewFirst, out reviewCount, out reviewFps, candidate);
+                reviewFrameIndex = reviewFirst;
                 reviewNote.Text = identityNote + (selectedAction.Slot == "idle" || selectedAction.Slot == "hover" || selectedAction.Slot == "click"
-                    ? "请看完这个动作，确认形象、动作和轮廓符合预期。"
+                    ? "在三种背景上查看动作和毛发边缘。"
                     : ThemeEventReviewNote(selectedAction.Slot));
-                subtitle.Text = candidate.Name;
-                for (int i = 0; i < previewImages.Count; i++) previewImages[i].Source = selectedAction.Frames[0];
-                changingAction = true;
-                reviewed.IsChecked = reviewedSlots.Contains(selectedAction.Slot);
-                changingAction = false;
-                if (selectedAction.Frames.Count == 1) playedSlots.Add(selectedAction.Slot);
-                reviewed.IsEnabled = playedSlots.Contains(selectedAction.Slot);
-                previewTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(34, 1000.0 / selectedAction.FramesPerSecond));
-                if (selectedAction.Frames.Count > 1) previewTimer.Start();
+                for (int i = 0; i < previewImages.Count; i++) previewImages[i].Source = selectedAction.Frames[reviewFirst];
+                if (presented && reviewCount == 1) playedSlots.Add(selectedAction.Slot);
+                reviewClock = System.Diagnostics.Stopwatch.StartNew();
+                previewTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(16, 500.0 / reviewFps));
+                if (presented && reviewCount > 1) previewTimer.Start();
                 refreshReviewState();
             };
-            reviewed.Checked += delegate
+            actionSelector.SelectionChanged += delegate { playSelection(); };
+            replay.Click += delegate { playSelection(); };
+            if (String.IsNullOrEmpty(themeReviewRenderPath))
+                review.ContentRendered += delegate { presented = true; playSelection(); };
+            install.Click += delegate
             {
-                if (changingAction) return;
-                if (playedSlots.Contains(selectedAction.Slot)) reviewedSlots.Add(selectedAction.Slot);
-                refreshReviewState();
-            };
-            reviewed.Unchecked += delegate
-            {
-                if (changingAction) return;
-                reviewedSlots.Remove(selectedAction.Slot);
-                refreshReviewState();
+                if (!playedSlots.Contains(selectedAction.Slot)) return;
+                reviewedSlots.Add(selectedAction.Slot);
+                if (reviewedSlots.Count == reviewActions.Count) { review.DialogResult = true; return; }
+                for (int offset = 1; offset <= reviewActions.Count; offset++) {
+                    int index = (actionSelector.SelectedIndex + offset) % reviewActions.Count;
+                    if (reviewedSlots.Contains(reviewActions[index].Slot)) continue;
+                    actionSelector.SelectedIndex = index;
+                    break;
+                }
             };
             review.Closed += delegate { previewTimer.Stop(); };
             actionSelector.SelectedIndex = 0;
